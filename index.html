@@ -282,6 +282,7 @@
     <div class="dot" id="gsDot"></div>
     <span id="gsStatusText">Google Sheets</span>
   </button>
+  <span id="saveStatus" style="font-size:.72rem;font-family:'DM Mono',monospace;color:var(--green);opacity:0;transition:opacity .5s;margin-left:4px"></span>
 </div>
 
 <!-- ANUAL -->
@@ -426,12 +427,16 @@
 const MONTHS     = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const MONTHS_F   = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
+const STATE_FN   = 'https://pbuhwpcpdcnaheaywmdv.supabase.co/functions/v1/app-state';
+const FN_URL     = 'https://pbuhwpcpdcnaheaywmdv.supabase.co/functions/v1/app-login';
+const TOKEN_KEY  = 'fc_token';
+
 let state = {
   year: new Date().getFullYear(),
   cotaYear: new Date().getFullYear(),
   rows: [],
   pessoas: [],
-  cotaDespesas: [], // {id, pessoaId, desc, year, monthValues:[12]}
+  cotaDespesas: [],
   projCats: [],
   weeks: 3,
   gsApiKey: '',
@@ -440,10 +445,7 @@ let state = {
 
 function gid() { return Date.now().toString(36)+Math.random().toString(36).slice(2,5); }
 
-function loadState() {
-  const s = localStorage.getItem('fc_v3');
-  if (s) { try { Object.assign(state, JSON.parse(s)); } catch(e){ console.error('loadState error',e); } }
-  else { console.log('fc_v3: nenhum dado salvo ainda'); }
+function applyDefaults() {
   if (!state.rows?.length) state.rows = [
     {id:gid(),name:'Thiago',type:'receita',values:Array(12).fill(0)},
     {id:gid(),name:'Heloísa',type:'receita',values:Array(12).fill(0)},
@@ -471,13 +473,72 @@ function loadState() {
   if (!state.weeks) state.weeks = 3;
   ensurePaid();
 }
-function save() {
+
+// Load from Supabase (authoritative) — falls back to localStorage cache
+async function loadState() {
+  // 1. Load cache immediately so UI renders fast
+  const cached = localStorage.getItem('fc_v3');
+  if (cached) { try { Object.assign(state, JSON.parse(cached)); } catch(e){} }
+  applyDefaults();
+  renderTable(); renderCotas();
+
+  // 2. Load from Supabase (source of truth)
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return;
   try {
-    localStorage.setItem('fc_v3', JSON.stringify(state));
+    const r = await fetch(STATE_FN, {
+      method: 'GET',
+      headers: { 'x-app-token': token }
+    });
+    const d = await r.json();
+    if (d.ok && d.state) {
+      Object.assign(state, d.state);
+      applyDefaults();
+      localStorage.setItem('fc_v3', JSON.stringify(state)); // update cache
+      renderTable(); renderCotas(); updateGSStatus();
+      showSaveStatus('✓ Dados carregados', 'ok');
+    }
   } catch(e) {
-    console.error('Erro ao salvar:', e);
-    alert('⚠️ Não foi possível salvar os dados. Verifique se o localStorage está disponível.');
+    console.warn('Supabase load failed, using cache:', e);
+    showSaveStatus('⚠ Usando dados locais (offline?)', 'warn');
   }
+}
+
+// Debounced save: writes to Supabase + updates localStorage cache
+let _saveTimer = null;
+function save() {
+  // Save to localStorage immediately as cache
+  try { localStorage.setItem('fc_v3', JSON.stringify(state)); } catch(e){}
+  // Debounce Supabase write by 800ms to avoid hammering on rapid edits
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(saveToCloud, 800);
+}
+
+async function saveToCloud() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return;
+  try {
+    const r = await fetch(STATE_FN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-app-token': token },
+      body: JSON.stringify({ state })
+    });
+    const d = await r.json();
+    if (d.ok) showSaveStatus('✓ Salvo', 'ok');
+    else showSaveStatus('⚠ Erro ao salvar', 'warn');
+  } catch(e) {
+    showSaveStatus('⚠ Offline — salvo localmente', 'warn');
+  }
+}
+
+function showSaveStatus(msg, type) {
+  let el = document.getElementById('saveStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = type === 'ok' ? 'var(--green)' : 'var(--warn)';
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 2500);
 }
 
 // Migrate: ensure every row has paid and comments arrays
@@ -1014,6 +1075,7 @@ async function doLogin() {
       localStorage.setItem(TOKEN_KEY, d.token);
       document.getElementById('loginScreen').classList.add('hidden');
       document.getElementById('loginInput').value = '';
+      await loadState(); // load from cloud after login
     } else {
       err.textContent = 'Senha incorreta. Tente novamente.';
       document.getElementById('loginInput').value = '';
@@ -1032,7 +1094,11 @@ document.getElementById('loginInput').addEventListener('keydown', e => {
 });
 
 // ── INIT ─────────────────────────────────────────────────────
-async function init(){ await checkAuth(); loadState(); renderTable(); renderCotas(); updateGSStatus(); }
+async function init() {
+  await checkAuth();
+  await loadState();
+  updateGSStatus();
+}
 init();
 </script>
 </body>
