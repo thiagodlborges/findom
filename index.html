@@ -72,11 +72,19 @@
 
   .pos { color:var(--green); }
   .neg { color:var(--red); }
-  .cell-input { background:transparent; border:none; color:inherit; font-family:'DM Mono',monospace; font-size:.76rem; text-align:right; width:100%; cursor:pointer; outline:none; }
+  .cell-input { background:transparent; border:none; color:inherit; font-family:'DM Mono',monospace; font-size:.76rem; text-align:right; width:100%; cursor:pointer; outline:none; min-width:60px; }
   .cell-input:focus { background:rgba(122,79,46,.1); border-radius:3px; color:var(--accent); }
+  td.editable { padding:4px 8px !important; }
   td.editable:focus-within { background:rgba(122,79,46,.07) !important; }
   .del-btn { background:none; border:none; color:var(--border); cursor:pointer; font-size:.7rem; padding:0 2px; margin-right:4px; transition:color .15s; }
   .del-btn:hover { color:var(--red); }
+  .cell-wrap { display:flex; align-items:center; justify-content:flex-end; gap:4px; }
+  .cell-input.pending { color:var(--red) !important; }
+  .cell-input.paid    { color:var(--text) !important; }
+  .pay-btn { flex-shrink:0; background:none; border:1px solid var(--border); border-radius:4px; cursor:pointer; font-size:.58rem; padding:1px 4px; color:var(--muted); transition:all .15s; line-height:1.4; white-space:nowrap; }
+  .pay-btn:hover         { border-color:var(--green); color:var(--green); }
+  .pay-btn.is-paid       { border-color:var(--green); color:var(--green); background:rgba(74,110,63,.1); }
+  .pay-btn.is-paid:hover { border-color:var(--red); color:var(--red); background:rgba(158,58,42,.08); }
   .add-row-btn { display:inline-flex; align-items:center; gap:5px; padding:7px 14px; border-radius:8px; border:1px dashed var(--border); background:transparent; color:var(--muted); font-family:'Syne',sans-serif; font-size:.73rem; cursor:pointer; transition:all .2s; }
   .add-row-btn:hover { border-color:var(--accent); color:var(--accent); }
 
@@ -372,8 +380,16 @@ function loadState() {
   ];
   if (!state.cotaYear) state.cotaYear = new Date().getFullYear();
   if (!state.weeks) state.weeks = 3;
+  ensurePaid();
 }
 function save() { localStorage.setItem('fc_v3', JSON.stringify(state)); }
+
+// Migrate: ensure every row has a paid array
+function ensurePaid() {
+  state.rows.forEach(r => {
+    if (!r.paid || r.paid.length !== 12) r.paid = Array(12).fill(false);
+  });
+}
 
 function fmt(v)     { if(!v||isNaN(v)||v===0) return '—'; return 'R$\u00a0'+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0}); }
 function fmtF(v)    { return 'R$\u00a0'+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -390,11 +406,22 @@ function renderTable() {
 
   function mkRow(row) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td><button class="del-btn" onclick="deleteRow('${row.id}')" title="Excluir">✕</button>${row.name}</td>`
-      + row.values.map((v,i) =>
-        `<td class="editable"><input class="cell-input ${row.type==='receita'?'pos':''}" value="${v||''}" placeholder="—"
-          onchange="updateCell('${row.id}',${i},this.value)" onfocus="this.select()"></td>`
-      ).join('');
+    const cells = row.values.map((v,i) => {
+      const haVal = v && v !== 0;
+      const isPaid = haVal && (row.paid?.[i] === true);
+      const inputCls = haVal ? (isPaid ? 'paid' : 'pending') : '';
+      const btnLabel = isPaid ? '✓ pago' : '○';
+      const btnCls   = isPaid ? 'pay-btn is-paid' : 'pay-btn';
+      const btn = haVal
+        ? `<button class="${btnCls}" onclick="togglePaid('${row.id}',${i})" title="${isPaid?'Marcar como pendente':'Marcar como pago/recebido'}">${btnLabel}</button>`
+        : '';
+      return `<td class="editable"><div class="cell-wrap">
+        <input class="cell-input ${inputCls}" value="${v||''}" placeholder="—"
+          onchange="updateCell('${row.id}',${i},this.value)" onfocus="this.select()">
+        ${btn}
+      </div></td>`;
+    }).join('');
+    tr.innerHTML = `<td><button class="del-btn" onclick="deleteRow('${row.id}')" title="Excluir">✕</button>${row.name}</td>` + cells;
     tb.appendChild(tr);
   }
   function mkSep(label) {
@@ -422,7 +449,17 @@ function renderTable() {
 }
 function updateCell(id,i,raw) {
   const r=state.rows.find(x=>x.id===id); if(!r) return;
-  r.values[i]=pv(raw); save(); renderTable();
+  r.values[i]=pv(raw);
+  // reset paid status when value is edited
+  if (!r.paid) r.paid = Array(12).fill(false);
+  r.paid[i] = false;
+  save(); renderTable();
+}
+function togglePaid(id,i) {
+  const r=state.rows.find(x=>x.id===id); if(!r) return;
+  if (!r.paid) r.paid = Array(12).fill(false);
+  r.paid[i] = !r.paid[i];
+  save(); renderTable();
 }
 function deleteRow(id) {
   if(!confirm('Excluir esta linha?')) return;
@@ -442,7 +479,7 @@ function addRow() {
   const name=document.getElementById('modalName').value.trim();
   const type=document.getElementById('modalType').value;
   if(!name) return;
-  state.rows.push({id:gid(),name,type,values:Array(12).fill(0)});
+  state.rows.push({id:gid(),name,type,values:Array(12).fill(0),paid:Array(12).fill(false)});
   save(); closeModal('modalAddRow'); renderTable();
 }
 document.getElementById('modalName').addEventListener('keydown',e=>{if(e.key==='Enter')addRow();});
