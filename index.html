@@ -24,6 +24,42 @@
   * { margin:0; padding:0; box-sizing:border-box; }
   body { background:var(--bg); color:var(--text); font-family:'Syne',sans-serif; min-height:100vh; }
 
+  /* LOGIN */
+  #loginScreen {
+    position:fixed; inset:0; z-index:999;
+    background:var(--bg);
+    display:flex; align-items:center; justify-content:center;
+  }
+  #loginScreen.hidden { display:none; }
+  .login-card {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:18px; padding:40px 36px; width:360px; max-width:92vw;
+    box-shadow:0 8px 40px rgba(44,26,14,.13);
+    display:flex; flex-direction:column; align-items:center; gap:0;
+  }
+  .login-logo { font-size:1.4rem; font-weight:800; letter-spacing:-.5px; margin-bottom:6px; }
+  .login-logo span { color:var(--accent); }
+  .login-sub { font-size:.78rem; color:var(--muted); margin-bottom:32px; }
+  .login-field { width:100%; margin-bottom:14px; }
+  .login-field label { display:block; font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin-bottom:5px; }
+  .login-field input {
+    width:100%; background:var(--surface2); border:1px solid var(--border);
+    border-radius:10px; color:var(--text); font-family:'Syne',sans-serif;
+    font-size:.95rem; padding:11px 14px; outline:none; transition:border-color .2s;
+  }
+  .login-field input:focus { border-color:var(--accent); }
+  .login-btn {
+    width:100%; margin-top:6px; padding:12px; border-radius:10px; border:none;
+    background:var(--accent); color:#fff; font-family:'Syne',sans-serif;
+    font-size:.9rem; font-weight:700; cursor:pointer; transition:background .2s;
+  }
+  .login-btn:hover { background:var(--accent2); }
+  .login-error {
+    font-size:.78rem; color:var(--red); margin-top:10px;
+    text-align:center; min-height:18px; font-family:'DM Mono',monospace;
+  }
+  .login-hint { font-size:.7rem; color:var(--border); margin-top:20px; text-align:center; }
+
   .header { display:flex; align-items:center; justify-content:space-between; padding:16px 28px; border-bottom:1px solid var(--border); background:var(--surface); position:sticky; top:0; z-index:100; }
   .logo { font-size:1.1rem; font-weight:800; letter-spacing:-.5px; }
   .logo span { color:var(--accent); }
@@ -181,6 +217,20 @@
 </style>
 </head>
 <body>
+
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">Finanças<span>Casa</span></div>
+    <div class="login-sub">Controle financeiro pessoal</div>
+    <div class="login-field">
+      <label>Senha de acesso</label>
+      <input type="password" id="loginInput" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="login-btn" onclick="doLogin()">Entrar</button>
+    <div class="login-error" id="loginError"></div>
+    <div class="login-hint">Acesso restrito — família</div>
+  </div>
+</div>
 
 <div class="header">
   <div class="logo">Finanças<span>Casa</span></div>
@@ -789,8 +839,56 @@ function showPage(name){
   if(name==='config'){ renderConfigPessoas(); loadConfigInputs(); }
 }
 
+// ── LOGIN (Supabase-backed) ───────────────────────────────────
+const FN_URL  = 'https://pbuhwpcpdcnaheaywmdv.supabase.co/functions/v1/app-login';
+const TOKEN_KEY = 'fc_token';
+
+async function checkAuth() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return;
+  try {
+    const r = await fetch(FN_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token }) });
+    const d = await r.json();
+    if (d.ok) document.getElementById('loginScreen').classList.add('hidden');
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch { /* offline — keep screen */ }
+}
+
+async function doLogin() {
+  const btn = document.querySelector('.login-btn');
+  const err = document.getElementById('loginError');
+  const val = document.getElementById('loginInput').value;
+  if (!val) return;
+
+  btn.textContent = 'Verificando...'; btn.disabled = true;
+  err.textContent = '';
+
+  try {
+    const r = await fetch(FN_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: val }) });
+    const d = await r.json();
+    if (d.ok && d.token) {
+      localStorage.setItem(TOKEN_KEY, d.token);
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('loginInput').value = '';
+    } else {
+      err.textContent = 'Senha incorreta. Tente novamente.';
+      document.getElementById('loginInput').value = '';
+      document.getElementById('loginInput').focus();
+      setTimeout(() => { err.textContent = ''; }, 3000);
+    }
+  } catch {
+    err.textContent = 'Erro de conexão. Tente novamente.';
+  } finally {
+    btn.textContent = 'Entrar'; btn.disabled = false;
+  }
+}
+
+document.getElementById('loginInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+
 // ── INIT ─────────────────────────────────────────────────────
-function init(){ loadState(); renderTable(); renderCotas(); updateGSStatus(); }
+async function init(){ await checkAuth(); loadState(); renderTable(); renderCotas(); updateGSStatus(); }
 init();
 </script>
 </body>
