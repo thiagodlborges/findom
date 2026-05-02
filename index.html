@@ -440,7 +440,8 @@ function gid() { return Date.now().toString(36)+Math.random().toString(36).slice
 
 function loadState() {
   const s = localStorage.getItem('fc_v3');
-  if (s) { try { Object.assign(state, JSON.parse(s)); } catch(e){} }
+  if (s) { try { Object.assign(state, JSON.parse(s)); } catch(e){ console.error('loadState error',e); } }
+  else { console.log('fc_v3: nenhum dado salvo ainda'); }
   if (!state.rows?.length) state.rows = [
     {id:gid(),name:'Thiago',type:'receita',values:Array(12).fill(0)},
     {id:gid(),name:'Heloísa',type:'receita',values:Array(12).fill(0)},
@@ -468,7 +469,14 @@ function loadState() {
   if (!state.weeks) state.weeks = 3;
   ensurePaid();
 }
-function save() { localStorage.setItem('fc_v3', JSON.stringify(state)); }
+function save() {
+  try {
+    localStorage.setItem('fc_v3', JSON.stringify(state));
+  } catch(e) {
+    console.error('Erro ao salvar:', e);
+    alert('⚠️ Não foi possível salvar os dados. Verifique se o localStorage está disponível.');
+  }
+}
 
 // Migrate: ensure every row has paid and comments arrays
 function ensurePaid() {
@@ -509,7 +517,7 @@ function renderTable() {
         : '';
       return `<td class="editable"><div class="cell-wrap">
         <input class="cell-input ${inputCls}" value="${v||''}" placeholder="—"
-          onchange="updateCell('${row.id}',${i},this.value)" onfocus="this.select()">
+          onblur="updateCell('${row.id}',${i},this.value)" onfocus="this.select()">
         ${payBtn}${cmntBtn}
       </div></td>`;
     }).join('');
@@ -541,11 +549,13 @@ function renderTable() {
 }
 function updateCell(id,i,raw) {
   const r=state.rows.find(x=>x.id===id); if(!r) return;
-  r.values[i]=pv(raw);
-  // reset paid status when value is edited
+  const newVal = pv(raw);
+  if (r.values[i] === newVal) return; // no change, skip
+  r.values[i]=newVal;
   if (!r.paid) r.paid = Array(12).fill(false);
   r.paid[i] = false;
-  save(); renderTable();
+  save();
+  renderTable(); // safe here: onblur means field is already unfocused
 }
 function togglePaid(id,i) {
   const r=state.rows.find(x=>x.id===id); if(!r) return;
