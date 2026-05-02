@@ -121,6 +121,33 @@
   .pay-btn:hover         { border-color:var(--green); color:var(--green); }
   .pay-btn.is-paid       { border-color:var(--green); color:var(--green); background:rgba(74,110,63,.1); }
   .pay-btn.is-paid:hover { border-color:var(--red); color:var(--red); background:rgba(158,58,42,.08); }
+
+  /* COMMENT BUTTON & POPOVER */
+  .cmnt-btn { flex-shrink:0; background:none; border:none; cursor:pointer; font-size:.78rem; padding:0 1px; color:var(--border); transition:color .15s; line-height:1; position:relative; }
+  .cmnt-btn:hover   { color:var(--accent2); }
+  .cmnt-btn.has-cmnt { color:var(--accent); }
+  .cmnt-dot { position:absolute; top:-1px; right:-1px; width:5px; height:5px; border-radius:50%; background:var(--accent); display:none; }
+  .cmnt-btn.has-cmnt .cmnt-dot { display:block; }
+
+  .cmnt-popover {
+    position:fixed; z-index:500;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; box-shadow:0 6px 24px rgba(44,26,14,.16);
+    padding:10px; width:220px; display:none; flex-direction:column; gap:6px;
+  }
+  .cmnt-popover.open { display:flex; }
+  .cmnt-popover textarea {
+    width:100%; resize:none; height:72px; background:var(--surface2);
+    border:1px solid var(--border); border-radius:7px; color:var(--text);
+    font-family:'Syne',sans-serif; font-size:.78rem; padding:7px 9px;
+    outline:none; transition:border-color .15s; line-height:1.5;
+  }
+  .cmnt-popover textarea:focus { border-color:var(--accent); }
+  .cmnt-popover-btns { display:flex; gap:6px; justify-content:flex-end; }
+  .cmnt-save { padding:4px 12px; border-radius:6px; border:none; background:var(--accent); color:#fff; font-family:'Syne',sans-serif; font-size:.72rem; font-weight:700; cursor:pointer; transition:background .15s; }
+  .cmnt-save:hover { background:var(--accent2); }
+  .cmnt-clear { padding:4px 10px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--muted); font-family:'Syne',sans-serif; font-size:.72rem; cursor:pointer; transition:all .15s; }
+  .cmnt-clear:hover { border-color:var(--red); color:var(--red); }
   .add-row-btn { display:inline-flex; align-items:center; gap:5px; padding:7px 14px; border-radius:8px; border:1px dashed var(--border); background:transparent; color:var(--muted); font-family:'Syne',sans-serif; font-size:.73rem; cursor:pointer; transition:all .2s; }
   .add-row-btn:hover { border-color:var(--accent); color:var(--accent); }
 
@@ -229,6 +256,15 @@
     <button class="login-btn" onclick="doLogin()">Entrar</button>
     <div class="login-error" id="loginError"></div>
     <div class="login-hint">Acesso restrito — família</div>
+  </div>
+</div>
+
+<!-- COMMENT POPOVER (singleton, repositioned on open) -->
+<div class="cmnt-popover" id="cmntPopover">
+  <textarea id="cmntTextarea" placeholder="Adicione um comentário..."></textarea>
+  <div class="cmnt-popover-btns">
+    <button class="cmnt-clear" onclick="clearComment()">Limpar</button>
+    <button class="cmnt-save" onclick="saveComment()">Salvar</button>
   </div>
 </div>
 
@@ -434,10 +470,11 @@ function loadState() {
 }
 function save() { localStorage.setItem('fc_v3', JSON.stringify(state)); }
 
-// Migrate: ensure every row has a paid array
+// Migrate: ensure every row has paid and comments arrays
 function ensurePaid() {
   state.rows.forEach(r => {
-    if (!r.paid || r.paid.length !== 12) r.paid = Array(12).fill(false);
+    if (!r.paid    || r.paid.length    !== 12) r.paid     = Array(12).fill(false);
+    if (!r.comments|| r.comments.length!== 12) r.comments = Array(12).fill('');
   });
 }
 
@@ -462,13 +499,18 @@ function renderTable() {
       const inputCls = haVal ? (isPaid ? 'paid' : 'pending') : '';
       const btnLabel = isPaid ? '✓ pago' : '○';
       const btnCls   = isPaid ? 'pay-btn is-paid' : 'pay-btn';
-      const btn = haVal
+      const payBtn = haVal
         ? `<button class="${btnCls}" onclick="togglePaid('${row.id}',${i})" title="${isPaid?'Marcar como pendente':'Marcar como pago/recebido'}">${btnLabel}</button>`
+        : '';
+      const hasCmnt = !!(row.comments?.[i]);
+      const cmntCls = 'cmnt-btn' + (hasCmnt ? ' has-cmnt' : '');
+      const cmntBtn = haVal
+        ? `<button class="${cmntCls}" onclick="openComment(event,'${row.id}',${i})" title="${hasCmnt ? row.comments[i] : 'Adicionar comentário'}">💬<span class="cmnt-dot"></span></button>`
         : '';
       return `<td class="editable"><div class="cell-wrap">
         <input class="cell-input ${inputCls}" value="${v||''}" placeholder="—"
           onchange="updateCell('${row.id}',${i},this.value)" onfocus="this.select()">
-        ${btn}
+        ${payBtn}${cmntBtn}
       </div></td>`;
     }).join('');
     tr.innerHTML = `<td><button class="del-btn" onclick="deleteRow('${row.id}')" title="Excluir">✕</button>${row.name}</td>` + cells;
@@ -511,6 +553,62 @@ function togglePaid(id,i) {
   r.paid[i] = !r.paid[i];
   save(); renderTable();
 }
+
+// ── COMMENTS ────────────────────────────────────────────────
+let _cmnt = { rowId:null, mi:null }; // active popover target
+
+function openComment(evt, rowId, mi) {
+  evt.stopPropagation();
+  const pop = document.getElementById('cmntPopover');
+  const ta  = document.getElementById('cmntTextarea');
+  const r   = state.rows.find(x=>x.id===rowId);
+
+  // If same cell clicked again — toggle close
+  if (_cmnt.rowId===rowId && _cmnt.mi===mi && pop.classList.contains('open')) {
+    closeComment(); return;
+  }
+  _cmnt = { rowId, mi };
+  ta.value = r?.comments?.[mi] || '';
+
+  // Position popover near the button
+  const rect = evt.currentTarget.getBoundingClientRect();
+  const pw = 220, ph = 130;
+  let left = rect.left + window.scrollX;
+  let top  = rect.bottom + window.scrollY + 4;
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  if (top + ph > window.innerHeight + window.scrollY - 8) top = rect.top + window.scrollY - ph - 4;
+
+  pop.style.left = left + 'px';
+  pop.style.top  = top  + 'px';
+  pop.classList.add('open');
+  setTimeout(() => ta.focus(), 40);
+}
+
+function saveComment() {
+  const r = state.rows.find(x=>x.id===_cmnt.rowId); if(!r) return;
+  if (!r.comments) r.comments = Array(12).fill('');
+  r.comments[_cmnt.mi] = document.getElementById('cmntTextarea').value.trim();
+  save(); closeComment(); renderTable();
+}
+
+function clearComment() {
+  document.getElementById('cmntTextarea').value = '';
+  saveComment();
+}
+
+function closeComment() {
+  document.getElementById('cmntPopover').classList.remove('open');
+  _cmnt = { rowId:null, mi:null };
+}
+
+// Close popover on outside click or Escape
+document.addEventListener('click', e => {
+  const pop = document.getElementById('cmntPopover');
+  if (pop.classList.contains('open') && !pop.contains(e.target)) closeComment();
+});
+document.addEventListener('keydown', e => {
+  if (e.key==='Escape') closeComment();
+});
 function deleteRow(id) {
   if(!confirm('Excluir esta linha?')) return;
   state.rows=state.rows.filter(r=>r.id!==id); save(); renderTable();
@@ -529,7 +627,7 @@ function addRow() {
   const name=document.getElementById('modalName').value.trim();
   const type=document.getElementById('modalType').value;
   if(!name) return;
-  state.rows.push({id:gid(),name,type,values:Array(12).fill(0),paid:Array(12).fill(false)});
+  state.rows.push({id:gid(),name,type,values:Array(12).fill(0),paid:Array(12).fill(false),comments:Array(12).fill('')});
   save(); closeModal('modalAddRow'); renderTable();
 }
 document.getElementById('modalName').addEventListener('keydown',e=>{if(e.key==='Enter')addRow();});
