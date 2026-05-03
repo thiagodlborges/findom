@@ -163,6 +163,8 @@
   .cota-config-row input[type=number]:focus { border-color:var(--accent); }
   .cota-add-btn { display:inline-flex; align-items:center; gap:5px; padding:7px 14px; border-radius:8px; border:none; background:var(--accent); color:#fff; font-family:'Syne',sans-serif; font-size:.75rem; font-weight:700; cursor:pointer; transition:background .15s; }
   .cota-add-btn:hover { background:var(--accent2); }
+  .cota-change-btn { display:inline-flex; align-items:center; gap:5px; padding:7px 14px; border-radius:8px; border:1px solid var(--border); background:transparent; color:var(--muted); font-family:'Syne',sans-serif; font-size:.75rem; font-weight:600; cursor:pointer; transition:all .15s; }
+  .cota-change-btn:hover { border-color:var(--accent); color:var(--accent); }
 
   .cota-table-wrap { overflow-x:auto; border-radius:10px; border:1px solid var(--border); margin-bottom:8px; }
   .cota-table { width:100%; border-collapse:collapse; font-family:'DM Mono',monospace; font-size:.74rem; min-width:980px; }
@@ -423,6 +425,43 @@
   </div>
 </div>
 
+<!-- MODAL: ALTERAR COTA -->
+<div class="modal-overlay" id="modalChangeCota">
+  <div class="modal">
+    <h3>Alterar Cota Mensal</h3>
+    <div style="font-size:.78rem;color:var(--muted);margin-bottom:14px;line-height:1.6">
+      O novo valor será aplicado a partir do mês selecionado. Os meses anteriores manterão a cota original.
+    </div>
+    <div class="modal-field">
+      <label>Novo valor da cota (R$)</label>
+      <input id="changeCotaValor" type="number" placeholder="0,00">
+    </div>
+    <div class="modal-2col">
+      <div class="modal-field">
+        <label>A partir do mês</label>
+        <select id="changeCotaMes">
+          <option value="0">Janeiro</option><option value="1">Fevereiro</option>
+          <option value="2">Março</option><option value="3">Abril</option>
+          <option value="4">Maio</option><option value="5">Junho</option>
+          <option value="6">Julho</option><option value="7">Agosto</option>
+          <option value="8">Setembro</option><option value="9">Outubro</option>
+          <option value="10">Novembro</option><option value="11">Dezembro</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label>Ano</label>
+        <input id="changeCotaAno" type="number" placeholder="2025">
+      </div>
+    </div>
+    <div id="changeCotaHistorico" style="margin-top:8px;font-size:.73rem;color:var(--muted);font-family:'DM Mono',monospace;line-height:1.8;background:var(--surface2);border-radius:8px;padding:8px 10px;border:1px solid var(--border);display:none"></div>
+    <input type="hidden" id="changeCotaPessoaId">
+    <div class="modal-btns">
+      <button class="btn btn-accent" onclick="confirmChangeCota()">Salvar alteração</button>
+      <button class="btn btn-ghost" onclick="closeModal('modalChangeCota')">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const MONTHS     = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const MONTHS_F   = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -484,11 +523,20 @@ function applyDefaults() {
   ];
   if (!state.cotaYear) state.cotaYear = new Date().getFullYear();
   if (!state.weeks) state.weeks = 3;
+  // Migrate: convert pessoa.cota (number) → pessoa.cotaHistorico (array)
+  state.pessoas.forEach(p => {
+    if (!p.cotaHistorico || !p.cotaHistorico.length) {
+      const val = p.cota || 0;
+      p.cotaHistorico = [{ valor: val, ano: 2020, mes: 0 }]; // from the beginning of time
+    }
+  });
   ensurePaid();
 }
 
 // Load from Supabase (authoritative) — falls back to localStorage cache
 async function loadState() {
+  _booting = true; // lock saves during load
+
   // 1. Load cache immediately so UI renders fast
   const cached = localStorage.getItem('fc_v3');
   if (cached) { try { Object.assign(state, JSON.parse(cached)); } catch(e){} }
@@ -497,7 +545,7 @@ async function loadState() {
 
   // 2. Load from Supabase (source of truth)
   const token = localStorage.getItem(TOKEN_KEY);
-  if (!token) return;
+  if (!token) { _booting = false; return; }
   try {
     const r = await fetch(STATE_FN, {
       method: 'GET',
@@ -514,12 +562,17 @@ async function loadState() {
   } catch(e) {
     console.warn('Supabase load failed, using cache:', e);
     showSaveStatus('⚠ Usando dados locais (offline?)', 'warn');
+  } finally {
+    _booting = false; // always release lock
   }
 }
 
 // Debounced save: writes to Supabase + updates localStorage cache
 let _saveTimer = null;
+let _booting = true; // lock saves during initial load
+
 function save() {
+  if (_booting) return; // never save during boot
   // Save to localStorage immediately as cache
   try { localStorage.setItem('fc_v3', JSON.stringify(state)); } catch(e){}
   // Debounce Supabase write by 800ms to avoid hammering on rapid edits
@@ -754,11 +807,20 @@ function getCotaGasto(pessoaId, mi) {
     .reduce((s,d)=>s+(d.monthValues[mi]||0),0);
 }
 
+function getCotaDoMes(pessoa, ano, mes) {
+  // Find the most recent cotaHistorico entry that is <= this ano/mes
+  const hist = (pessoa.cotaHistorico || [])
+    .filter(h => h.ano < ano || (h.ano === ano && h.mes <= mes))
+    .sort((a, b) => (b.ano - a.ano) || (b.mes - a.mes));
+  return hist.length ? hist[0].valor : (pessoa.cota || 0);
+}
+
 function calcSaldos(pessoaId) {
-  const cota = state.pessoas.find(p=>p.id===pessoaId)?.cota||0;
+  const pessoa = state.pessoas.find(p=>p.id===pessoaId);
   const ini=Array(12).fill(0), fim=Array(12).fill(0);
   let carry=0;
   for(let i=0;i<12;i++){
+    const cota = getCotaDoMes(pessoa, state.cotaYear, i);
     ini[i]=carry;
     fim[i]=carry+cota-getCotaGasto(pessoaId,i);
     carry=fim[i];
@@ -786,13 +848,13 @@ function renderCotas() {
     const block=document.createElement('div');
     block.className='cotas-person-block';
 
+    const cotaAtual = getCotaDoMes(pessoa, state.cotaYear, 11); // last month of viewed year for badge
     block.innerHTML=`
-      <h3>👤 ${pessoa.name} <span class="cota-badge">Cota: ${fmtF(pessoa.cota)}/mês</span>
+      <h3>👤 ${pessoa.name} <span class="cota-badge">Cota atual: ${fmtF(cotaAtual)}/mês</span>
         ${futuras>0?`<span style="font-size:.72rem;color:var(--warn);font-family:'DM Mono',monospace">⚠ ${fmtF(futuras)} comprometidos em anos futuros</span>`:''}
       </h3>
       <div class="cota-config-row">
-        <label>Cota mensal:</label>
-        <input type="number" value="${pessoa.cota||0}" onchange="updateCota('${pessoa.id}',this.value)">
+        <button class="cota-change-btn" onclick="openChangeCotaModal('${pessoa.id}')">✏️ Alterar cota</button>
         <button class="cota-add-btn" onclick="openCotaModal('${pessoa.id}')">＋ Lançar despesa</button>
       </div>`;
 
@@ -821,11 +883,12 @@ function renderCotas() {
     }
 
     mkR('cota-total-row','Total Gasto', gastos, v=>v>0?'neg':'');
-    mkR('cota-total-row','Cota do Mês', Array(12).fill(pessoa.cota||0), v=>'pos');
+    const cotasPorMes = Array(12).fill(0).map((_,i)=>getCotaDoMes(pessoa, state.cotaYear, i));
+    mkR('cota-total-row','Cota do Mês', cotasPorMes, v=>'pos');
     mkR('cota-carry-row','↳ Saldo anterior', ini, (v)=>v!==0?cc(v):'');
 
-    // Disponível = ini + cota - gasto
-    const disp=Array(12).fill(0).map((_,i)=>(ini[i]||0)+(pessoa.cota||0)-gastos[i]);
+    // Disponível = ini + cota_do_mes - gasto
+    const disp=Array(12).fill(0).map((_,i)=>(ini[i]||0)+cotasPorMes[i]-gastos[i]);
     mkR('cota-disp-row','💰 Disponível no mês', disp, cc);
     mkR('cota-saldo-row','SALDO ACUMULADO', fim, cc);
 
@@ -843,9 +906,42 @@ function renderCotas() {
   });
 }
 
-function updateCota(id,val) {
-  const p=state.pessoas.find(x=>x.id===id);
-  if(p){ p.cota=pv(val); save(); renderCotas(); }
+function openChangeCotaModal(pessoaId) {
+  const pessoa = state.pessoas.find(x=>x.id===pessoaId); if(!pessoa) return;
+  document.getElementById('changeCotaPessoaId').value = pessoaId;
+  document.getElementById('changeCotaValor').value = '';
+  document.getElementById('changeCotaMes').value = new Date().getMonth();
+  document.getElementById('changeCotaAno').value = new Date().getFullYear();
+
+  // Show history
+  const hist = (pessoa.cotaHistorico||[]).slice().sort((a,b)=>(b.ano-a.ano)||(b.mes-a.mes));
+  const histEl = document.getElementById('changeCotaHistorico');
+  if (hist.length) {
+    histEl.style.display = 'block';
+    histEl.innerHTML = '<strong style="color:var(--text)">Histórico de cotas:</strong><br>'
+      + hist.map(h=>`${MONTHS_F[h.mes]}/${h.ano}: ${fmtF(h.valor)}`).join('<br>');
+  } else {
+    histEl.style.display = 'none';
+  }
+  openModal('modalChangeCota');
+  setTimeout(()=>document.getElementById('changeCotaValor').focus(), 60);
+}
+
+function confirmChangeCota() {
+  const pessoaId = document.getElementById('changeCotaPessoaId').value;
+  const valor = pv(document.getElementById('changeCotaValor').value);
+  const mes   = parseInt(document.getElementById('changeCotaMes').value);
+  const ano   = parseInt(document.getElementById('changeCotaAno').value);
+  if (!valor || isNaN(ano)) { alert('Preencha o valor e o ano.'); return; }
+  const pessoa = state.pessoas.find(x=>x.id===pessoaId); if(!pessoa) return;
+  if (!pessoa.cotaHistorico) pessoa.cotaHistorico = [];
+  // Remove any existing entry for the exact same month/year (replace it)
+  pessoa.cotaHistorico = pessoa.cotaHistorico.filter(h=>!(h.ano===ano && h.mes===mes));
+  pessoa.cotaHistorico.push({ valor, ano, mes });
+  // Keep pessoa.cota in sync with the latest entry for backwards compat
+  const latest = pessoa.cotaHistorico.slice().sort((a,b)=>(b.ano-a.ano)||(b.mes-a.mes))[0];
+  pessoa.cota = latest.valor;
+  save(); closeModal('modalChangeCota'); renderCotas();
 }
 
 function openCotaModal(pessoaId) {
@@ -1041,7 +1137,14 @@ function exportData(){
 function importData(e){
   const f=e.target.files[0]; if(!f) return;
   const r=new FileReader();
-  r.onload=ev=>{try{Object.assign(state,JSON.parse(ev.target.result));save();init();alert('✅ Importado!');}catch{alert('❌ Arquivo inválido.');}};
+  r.onload=ev=>{try{
+    Object.assign(state,JSON.parse(ev.target.result));
+    _booting=false;
+    save();
+    applyDefaults();
+    renderTable(); renderCotas(); updateGSStatus();
+    alert('✅ Importado!');
+  }catch{alert('❌ Arquivo inválido.');}};
   r.readAsText(f);
 }
 
