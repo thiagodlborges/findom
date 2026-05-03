@@ -1045,9 +1045,6 @@ function showPage(name){
 }
 
 // ── LOGIN (Supabase-backed) ───────────────────────────────────
-const FN_URL  = 'https://pbuhwpcpdcnaheaywmdv.supabase.co/functions/v1/app-login';
-const TOKEN_KEY = 'fc_token';
-
 async function checkAuth() {
   const token = localStorage.getItem(TOKEN_KEY);
   if (!token) return;
