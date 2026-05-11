@@ -401,7 +401,7 @@
     <h3>Nova Despesa na Cota</h3>
     <div class="modal-field"><label>Descrição</label><input id="cotaDesc" placeholder="Ex: Tênis, Jantar, Curso..."></div>
     <div class="modal-2col">
-      <div class="modal-field"><label>Valor total (R$)</label><input id="cotaValor" type="number" placeholder="0,00" oninput="calcCotaParcelas()"></div>
+      <div class="modal-field"><label>Valor total (R$)</label><input id="cotaValor" type="text" inputmode="decimal" placeholder="0,00" oninput="calcCotaParcelas()"></div>
       <div class="modal-field"><label>Nº de parcelas</label><input id="cotaParcelas" type="number" placeholder="1" min="1" value="1" oninput="calcCotaParcelas()"></div>
     </div>
     <div class="modal-2col">
@@ -434,7 +434,7 @@
     </div>
     <div class="modal-field">
       <label>Novo valor da cota (R$)</label>
-      <input id="changeCotaValor" type="number" placeholder="0,00">
+      <input id="changeCotaValor" type="text" inputmode="decimal" placeholder="0,00">
     </div>
     <div class="modal-2col">
       <div class="modal-field">
@@ -615,9 +615,39 @@ function ensurePaid() {
   });
 }
 
-function fmt(v)     { if(!v||isNaN(v)||v===0) return '—'; return Number(v).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0}); }
-function fmtF(v)    { return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function pv(s)      { if(!s&&s!==0) return 0; return parseFloat(String(s).replace(/\./g,'').replace(',','.')) || 0; }
+function fmt(v)  { if(!v||isNaN(v)||v===0) return '—'; return Number(v).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:2}); }
+function fmtF(v) { return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function pv(s) {
+  if (!s && s !== 0) return 0;
+  let str = String(s).trim();
+  // If both dot and comma exist, determine which is decimal separator
+  const hasDot   = str.includes('.');
+  const hasComma = str.includes(',');
+  if (hasComma && hasDot) {
+    // e.g. "1.234,56" → pt-BR: dot=thousands, comma=decimal
+    // e.g. "1,234.56" → en-US: comma=thousands, dot=decimal
+    const lastDot   = str.lastIndexOf('.');
+    const lastComma = str.lastIndexOf(',');
+    if (lastComma > lastDot) {
+      // comma is decimal separator (pt-BR style)
+      str = str.replace(/\./g, '').replace(',', '.');
+    } else {
+      // dot is decimal separator (en-US style)
+      str = str.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    // only comma: treat as decimal separator (pt-BR "1234,56" or thousands "1,234")
+    // if digits after comma <= 2, treat as decimal; else thousands
+    const afterComma = str.split(',')[1] || '';
+    if (afterComma.length <= 2) {
+      str = str.replace(',', '.');
+    } else {
+      str = str.replace(',', ''); // thousands separator
+    }
+  }
+  // only dot or plain number: parse as-is
+  return parseFloat(str.replace(/[^\d.-]/g, '')) || 0;
+}
 function cc(v)      { return v>0?'pos':v<0?'neg':''; }
 
 // ── ANNUAL ──────────────────────────────────────────────────
@@ -1022,7 +1052,7 @@ function renderProjCats() {
     const d=document.createElement('div'); d.className='proj-cat';
     d.innerHTML=`<span class="proj-cat-name">${cat.name}</span>
       <div><label class="proj-cat-label">Média/semana</label>
-        <input class="proj-cat-input" type="number" value="${cat.mw||0}" onchange="updateProjCat('${cat.id}',this.value)">
+        <input class="proj-cat-input" type="text" inputmode="decimal" value="${cat.mw||0}" onchange="updateProjCat('${cat.id}',this.value)">
       </div>
       <button class="remove-cat" onclick="removeProjCat('${cat.id}')">✕</button>`;
     c.appendChild(d);
