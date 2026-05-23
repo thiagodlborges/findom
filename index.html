@@ -330,12 +330,27 @@
 <div class="page" id="page-projecao">
   <div class="page-header">
     <h2>Projeção <span id="projMonthLabel" style="color:var(--accent);font-size:.95rem"></span></h2>
-    <div style="display:flex;align-items:center;gap:10px">
-      <span style="font-size:.8rem;color:var(--muted)">Semanas restantes:</span>
-      <div class="weeks-selector">
-        <button onclick="changeWeeks(-1)">−</button>
-        <span class="weeks-val" id="weeksVal">3</span>
-        <button onclick="changeWeeks(1)">＋</button>
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:.8rem;color:var(--muted)">Mês:</span>
+        <select id="projMesSelect" onchange="renderProjecao()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;font-family:'Syne',sans-serif;font-size:.8rem;outline:none;cursor:pointer">
+          <option value="0">Janeiro</option><option value="1">Fevereiro</option>
+          <option value="2">Março</option><option value="3">Abril</option>
+          <option value="4">Maio</option><option value="5">Junho</option>
+          <option value="6">Julho</option><option value="7">Agosto</option>
+          <option value="8">Setembro</option><option value="9">Outubro</option>
+          <option value="10">Novembro</option><option value="11">Dezembro</option>
+        </select>
+        <input id="projAnoInput" type="number" value="" onchange="renderProjecao()"
+          style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;font-family:'DM Mono',monospace;font-size:.8rem;outline:none;width:80px;text-align:center">
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:.8rem;color:var(--muted)">Semanas restantes:</span>
+        <div class="weeks-selector">
+          <button onclick="changeWeeks(-1)">−</button>
+          <span class="weeks-val" id="weeksVal">3</span>
+          <button onclick="changeWeeks(1)">＋</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1059,11 +1074,22 @@ function renderProjCats() {
   });
 }
 function renderProjecao() {
-  const now=new Date();
-  const nx=new Date(now.getFullYear(),now.getMonth()+1,1);
-  const label=nx.toLocaleString('pt-BR',{month:'long',year:'numeric'});
-  document.getElementById('projMonthLabel').textContent=`— ${label}`;
-  document.getElementById('weeksVal').textContent=state.weeks;
+  const now = new Date();
+  // Initialize selectors on first run
+  const mesSel = document.getElementById('projMesSelect');
+  const anoInp = document.getElementById('projAnoInput');
+  if (!anoInp.value) {
+    // Default: next month
+    const nx = new Date(now.getFullYear(), now.getMonth()+1, 1);
+    mesSel.value = nx.getMonth();
+    anoInp.value = nx.getFullYear();
+  }
+  const fi    = parseInt(mesSel.value);
+  const ano   = parseInt(anoInp.value) || now.getFullYear();
+  const label = MONTHS_F[fi] + ' de ' + ano;
+
+  document.getElementById('projMonthLabel').textContent = `— ${label}`;
+  document.getElementById('weeksVal').textContent = state.weeks;
   renderProjCats();
 
   let tot=0, rows='';
@@ -1073,13 +1099,10 @@ function renderProjecao() {
       <span class="proj-item-value ${v>0?'neg':''}">${v>0?fmtF(v):'—'}</span></div>`;
   });
 
-  const fi = nx.getMonth();
   const fixas = state.rows.filter(r=>r.type==='despesa').reduce((s,r)=>s+(r.values[fi]||0),0);
-
-  // Saldo do próximo mês na aba anual (receitas - despesas)
   const recNextMonth = state.rows.filter(r=>r.type==='receita').reduce((s,r)=>s+(r.values[fi]||0),0);
   const saldoAnual = recNextMonth - fixas;
-  const saldoFinal = saldoAnual - tot; // after variable spending
+  const saldoFinal = saldoAnual - tot;
   const saldoColor = saldoFinal >= 0 ? 'var(--green)' : 'var(--red)';
 
   document.getElementById('projResult').innerHTML=`
