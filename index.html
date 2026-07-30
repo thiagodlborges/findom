@@ -277,6 +277,7 @@
   <div class="nav-tabs">
     <button class="nav-tab active" onclick="showPage('anual')">📊 Anual</button>
     <button class="nav-tab" onclick="showPage('cotas')">👤 Cotas</button>
+    <button class="nav-tab" onclick="showPage('decimo')">🎁 13º</button>
     <button class="nav-tab" onclick="showPage('projecao')">🔮 Projeção</button>
     <button class="nav-tab" onclick="showPage('config')">⚙️ Config</button>
   </div>
@@ -324,6 +325,28 @@
     </div>
   </div>
   <div id="cotasContainer"></div>
+</div>
+
+<!-- 13º SALÁRIO -->
+<div class="page" id="page-decimo">
+  <div class="page-header">
+    <h2>13º Salário</h2>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="add-row-btn" onclick="openAddDecimoRow('receita')">＋ Previsão</button>
+      <button class="add-row-btn" onclick="openAddDecimoRow('despesa')">＋ Destinação</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th style="text-align:left">Item</th>
+        <th>Jan</th><th>Fev</th><th>Mar</th><th>Abr</th><th>Mai</th><th>Jun</th>
+        <th>Jul</th><th>Ago</th><th>Set</th><th>Out</th><th>Nov</th><th>Dez</th>
+      </tr></thead>
+      <tbody id="decimoTableBody"></tbody>
+    </table>
+  </div>
+  <div id="decimoNota" style="margin-top:10px;padding:9px 12px;background:rgba(122,79,46,.06);border:1px solid rgba(122,79,46,.18);border-radius:8px;font-size:.73rem;color:var(--muted);line-height:1.7"></div>
 </div>
 
 <!-- PROJEÇÃO -->
@@ -492,6 +515,7 @@ let state = {
   pessoas: [],
   cotaDespesas: [],
   projCats: [],
+  decimoRows: [],
   weeks: 3,
   gsApiKey: '',
   gsSheetId: '',
@@ -535,6 +559,10 @@ function applyDefaults() {
     {id:gid(),name:'Supermercado',mw:0},
     {id:gid(),name:'Lazer / Restaurantes',mw:0},
     {id:gid(),name:'Outros',mw:0},
+  ];
+  if (!state.decimoRows?.length) state.decimoRows = [
+    {id:gid(),name:'1ª parcela (até 30/11)',type:'receita',values:Array(12).fill(0),paid:Array(12).fill(false)},
+    {id:gid(),name:'2ª parcela (até 20/12)',type:'receita',values:Array(12).fill(0),paid:Array(12).fill(false)},
   ];
   if (!state.cotaYear) state.cotaYear = new Date().getFullYear();
   if (!state.weeks) state.weeks = 3;
@@ -627,6 +655,9 @@ function ensurePaid() {
   state.rows.forEach(r => {
     if (!r.paid    || r.paid.length    !== 12) r.paid     = Array(12).fill(false);
     if (!r.comments|| r.comments.length!== 12) r.comments = Array(12).fill('');
+  });
+  (state.decimoRows||[]).forEach(r => {
+    if (!r.paid || r.paid.length !== 12) r.paid = Array(12).fill(false);
   });
 }
 
@@ -1055,6 +1086,92 @@ function addPessoa() {
   save(); renderCotas(); renderConfigPessoas();
 }
 
+// ── 13º SALÁRIO ──────────────────────────────────────────────
+function renderDecimo() {
+  const tb = document.getElementById('decimoTableBody');
+  tb.innerHTML = '';
+  const rec = state.decimoRows.filter(r=>r.type==='receita');
+  const des = state.decimoRows.filter(r=>r.type==='despesa');
+
+  function mkRow(row) {
+    const tr = document.createElement('tr');
+    const cells = row.values.map((v,i) => {
+      const haVal = v && v !== 0;
+      const isPaid = haVal && (row.paid?.[i] === true);
+      const inputCls = haVal ? (isPaid ? 'paid' : 'pending') : '';
+      const btnLabel = isPaid ? '✓ pago' : '○';
+      const btnCls   = isPaid ? 'pay-btn is-paid' : 'pay-btn';
+      const payBtn = haVal
+        ? `<button class="${btnCls}" onclick="toggleDecimoPaid('${row.id}',${i})" title="${isPaid?'Marcar como pendente':'Marcar como recebido/pago'}">${btnLabel}</button>`
+        : '';
+      return `<td class="editable"><div class="cell-wrap">
+        <input class="cell-input ${inputCls}" value="${v||''}" placeholder="—"
+          onblur="updateDecimoCell('${row.id}',${i},this.value)" onfocus="this.select()">
+        ${payBtn}
+      </div></td>`;
+    }).join('');
+    tr.innerHTML = `<td><button class="del-btn" onclick="deleteDecimoRow('${row.id}')" title="Excluir">✕</button>${row.name}</td>` + cells;
+    tb.appendChild(tr);
+  }
+  function mkSep(label) {
+    const tr=document.createElement('tr'); tr.className='section-header';
+    tr.innerHTML=`<td colspan="13">▸ ${label}</td>`; tb.appendChild(tr);
+  }
+  function mkTotal(label, tots, cls='') {
+    const tr=document.createElement('tr'); tr.className='total-row '+(cls||'');
+    tr.innerHTML=`<td>${label}</td>`+tots.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('');
+    tb.appendChild(tr);
+  }
+
+  mkSep('PREVISÃO A RECEBER'); rec.forEach(mkRow);
+  const tR=Array(12).fill(0); rec.forEach(r=>r.values.forEach((v,i)=>{tR[i]+=(v||0);}));
+  mkTotal('Total Previsto', tR);
+
+  mkSep('DESTINAÇÕES'); des.forEach(mkRow);
+  const tD=Array(12).fill(0); des.forEach(r=>r.values.forEach((v,i)=>{tD[i]+=(v||0);}));
+  mkTotal('Total Destinado', tD);
+
+  // Saldo acumulado: negativo = destinações antecipadas ainda não cobertas pela previsão
+  let carry=0; const saldoAcum=[];
+  for(let i=0;i<12;i++){ carry += (tR[i]-tD[i]); saldoAcum.push(carry); }
+  const trS=document.createElement('tr'); trS.className='saldo-row';
+  trS.innerHTML=`<td>SALDO ACUMULADO</td>`+saldoAcum.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('');
+  tb.appendChild(trS);
+
+  const menorSaldo = Math.min(0, ...saldoAcum);
+  const nota = document.getElementById('decimoNota');
+  if (menorSaldo < 0) {
+    nota.innerHTML = `💡 Você antecipou <strong>${fmtF(Math.abs(menorSaldo))}</strong> em destinações antes de receber o 13º — é como um empréstimo de você mesmo, a repor (ex: nos investimentos) quando as parcelas caírem em novembro/dezembro.`;
+  } else {
+    nota.innerHTML = `💡 Lance aqui as parcelas previstas do 13º (em "Previsão a receber") e para onde esse dinheiro vai (em "Destinações"). Se você gastar ou investir antes de receber, o Saldo Acumulado fica negativo até novembro — sinalizando quanto repor depois.`;
+  }
+}
+function updateDecimoCell(id,i,raw) {
+  const r=state.decimoRows.find(x=>x.id===id); if(!r) return;
+  const newVal = pv(raw);
+  if (r.values[i] === newVal) return;
+  r.values[i]=newVal;
+  if (!r.paid) r.paid = Array(12).fill(false);
+  r.paid[i] = false;
+  save(); renderDecimo();
+}
+function toggleDecimoPaid(id,i) {
+  const r=state.decimoRows.find(x=>x.id===id); if(!r) return;
+  if (!r.paid) r.paid = Array(12).fill(false);
+  r.paid[i] = !r.paid[i];
+  save(); renderDecimo();
+}
+function deleteDecimoRow(id) {
+  if(!confirm('Excluir esta linha?')) return;
+  state.decimoRows=state.decimoRows.filter(r=>r.id!==id); save(); renderDecimo();
+}
+function openAddDecimoRow(type) {
+  const name = prompt(type==='receita' ? 'Nome da previsão (ex: 1ª parcela, Adiantamento...):' : 'Nome da destinação (ex: Repor investimento, Viagem, Presentes...):');
+  if(!name) return;
+  state.decimoRows.push({id:gid(),name:name.trim(),type,values:Array(12).fill(0),paid:Array(12).fill(false)});
+  save(); renderDecimo();
+}
+
 // ── PROJEÇÃO ─────────────────────────────────────────────────
 function changeWeeks(d) {
   state.weeks=Math.max(1,Math.min(8,(state.weeks||3)+d));
@@ -1206,9 +1323,10 @@ function showPage(name){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('page-'+name).classList.add('active');
-  ({anual:0,cotas:1,projecao:2,config:3});
-  document.querySelectorAll('.nav-tab')[{anual:0,cotas:1,projecao:2,config:3}[name]]?.classList.add('active');
+  const navIndex = {anual:0,cotas:1,decimo:2,projecao:3,config:4};
+  document.querySelectorAll('.nav-tab')[navIndex[name]]?.classList.add('active');
   if(name==='cotas') renderCotas();
+  if(name==='decimo') renderDecimo();
   if(name==='projecao') renderProjecao();
   if(name==='config'){ renderConfigPessoas(); loadConfigInputs(); }
 }
