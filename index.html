@@ -334,18 +334,10 @@
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="add-row-btn" onclick="openAddDecimoRow('receita')">＋ Previsão</button>
       <button class="add-row-btn" onclick="openAddDecimoRow('despesa')">＋ Destinação</button>
+      <button class="add-row-btn" onclick="addDecimoYear()">＋ Ano</button>
     </div>
   </div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr>
-        <th style="text-align:left">Item</th>
-        <th>Jan</th><th>Fev</th><th>Mar</th><th>Abr</th><th>Mai</th><th>Jun</th>
-        <th>Jul</th><th>Ago</th><th>Set</th><th>Out</th><th>Nov</th><th>Dez</th>
-      </tr></thead>
-      <tbody id="decimoTableBody"></tbody>
-    </table>
-  </div>
+  <div class="table-wrap" id="decimoTableWrap"></div>
   <div id="decimoNota" style="margin-top:10px;padding:9px 12px;background:rgba(122,79,46,.06);border:1px solid rgba(122,79,46,.18);border-radius:8px;font-size:.73rem;color:var(--muted);line-height:1.7"></div>
 </div>
 
@@ -516,6 +508,7 @@ let state = {
   cotaDespesas: [],
   projCats: [],
   decimoRows: [],
+  decimoYears: [],
   weeks: 3,
   gsApiKey: '',
   gsSheetId: '',
@@ -561,9 +554,10 @@ function applyDefaults() {
     {id:gid(),name:'Outros',mw:0},
   ];
   if (!state.decimoRows?.length) state.decimoRows = [
-    {id:gid(),name:'1ª parcela (até 30/11)',type:'receita',values:Array(12).fill(0),paid:Array(12).fill(false)},
-    {id:gid(),name:'2ª parcela (até 20/12)',type:'receita',values:Array(12).fill(0),paid:Array(12).fill(false)},
+    {id:gid(),name:'1ª parcela',type:'receita',values:{},paid:{}},
+    {id:gid(),name:'2ª parcela',type:'receita',values:{},paid:{}},
   ];
+  if (!state.decimoYears?.length) state.decimoYears = [new Date().getFullYear()];
   if (!state.cotaYear) state.cotaYear = new Date().getFullYear();
   if (!state.weeks) state.weeks = 3;
   // Migrate: convert pessoa.cota (number) → pessoa.cotaHistorico (array)
@@ -657,7 +651,8 @@ function ensurePaid() {
     if (!r.comments|| r.comments.length!== 12) r.comments = Array(12).fill('');
   });
   (state.decimoRows||[]).forEach(r => {
-    if (!r.paid || r.paid.length !== 12) r.paid = Array(12).fill(false);
+    if (!r.values || Array.isArray(r.values)) r.values = {};
+    if (!r.paid   || Array.isArray(r.paid))   r.paid   = {};
   });
 }
 
@@ -1088,77 +1083,77 @@ function addPessoa() {
 
 // ── 13º SALÁRIO ──────────────────────────────────────────────
 function renderDecimo() {
-  const tb = document.getElementById('decimoTableBody');
-  tb.innerHTML = '';
+  const wrap = document.getElementById('decimoTableWrap');
+  const anos = (state.decimoYears||[]).slice().sort((a,b)=>a-b);
   const rec = state.decimoRows.filter(r=>r.type==='receita');
   const des = state.decimoRows.filter(r=>r.type==='despesa');
+  const nCols = anos.length + 1;
 
   function mkRow(row) {
-    const tr = document.createElement('tr');
-    const cells = row.values.map((v,i) => {
+    const cells = anos.map(ano=>{
+      const v = row.values?.[ano] || 0;
       const haVal = v && v !== 0;
-      const isPaid = haVal && (row.paid?.[i] === true);
+      const isPaid = haVal && (row.paid?.[ano] === true);
       const inputCls = haVal ? (isPaid ? 'paid' : 'pending') : '';
       const btnLabel = isPaid ? '✓ pago' : '○';
       const btnCls   = isPaid ? 'pay-btn is-paid' : 'pay-btn';
       const payBtn = haVal
-        ? `<button class="${btnCls}" onclick="toggleDecimoPaid('${row.id}',${i})" title="${isPaid?'Marcar como pendente':'Marcar como recebido/pago'}">${btnLabel}</button>`
+        ? `<button class="${btnCls}" onclick="toggleDecimoPaid('${row.id}',${ano})" title="${isPaid?'Marcar como pendente':'Marcar como recebido/pago'}">${btnLabel}</button>`
         : '';
       return `<td class="editable"><div class="cell-wrap">
         <input class="cell-input ${inputCls}" value="${v||''}" placeholder="—"
-          onblur="updateDecimoCell('${row.id}',${i},this.value)" onfocus="this.select()">
+          onblur="updateDecimoCell('${row.id}',${ano},this.value)" onfocus="this.select()">
         ${payBtn}
       </div></td>`;
     }).join('');
-    tr.innerHTML = `<td><button class="del-btn" onclick="deleteDecimoRow('${row.id}')" title="Excluir">✕</button>${row.name}</td>` + cells;
-    tb.appendChild(tr);
+    return `<tr><td><button class="del-btn" onclick="deleteDecimoRow('${row.id}')" title="Excluir">✕</button>${row.name}</td>${cells}</tr>`;
   }
-  function mkSep(label) {
-    const tr=document.createElement('tr'); tr.className='section-header';
-    tr.innerHTML=`<td colspan="13">▸ ${label}</td>`; tb.appendChild(tr);
+  function mkSep(label) { return `<tr class="section-header"><td colspan="${nCols}">▸ ${label}</td></tr>`; }
+  function mkTotal(label, tots) { return `<tr class="total-row"><td>${label}</td>`+tots.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('')+`</tr>`; }
+
+  const tR = anos.map(ano=>rec.reduce((s,r)=>s+(r.values?.[ano]||0),0));
+  const tD = anos.map(ano=>des.reduce((s,r)=>s+(r.values?.[ano]||0),0));
+  let carry=0; const saldoAcum = tR.map((v,i)=>{ carry += (v-tD[i]); return carry; });
+
+  const theadCols = anos.map(ano=>`<th>${ano} <span style="cursor:pointer;opacity:.45" onclick="removeDecimoYear(${ano})" title="Remover coluna ${ano}">✕</span></th>`).join('');
+
+  let body = '';
+  body += mkSep('PREVISÃO A RECEBER');
+  body += rec.map(mkRow).join('');
+  body += mkTotal('Total Previsto', tR);
+  body += mkSep('DESTINAÇÕES');
+  body += des.map(mkRow).join('');
+  body += mkTotal('Total Destinado', tD);
+  body += `<tr class="saldo-row"><td>SALDO ACUMULADO</td>`+saldoAcum.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('')+`</tr>`;
+
+  if (!anos.length) {
+    wrap.innerHTML = `<div style="color:var(--muted);font-size:.85rem;padding:20px">Nenhum ano cadastrado ainda. Clique em <strong>＋ Ano</strong> para começar.</div>`;
+  } else {
+    wrap.innerHTML = `<table><thead><tr><th style="text-align:left">Item</th>${theadCols}</tr></thead><tbody>${body}</tbody></table>`;
   }
-  function mkTotal(label, tots, cls='') {
-    const tr=document.createElement('tr'); tr.className='total-row '+(cls||'');
-    tr.innerHTML=`<td>${label}</td>`+tots.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('');
-    tb.appendChild(tr);
-  }
 
-  mkSep('PREVISÃO A RECEBER'); rec.forEach(mkRow);
-  const tR=Array(12).fill(0); rec.forEach(r=>r.values.forEach((v,i)=>{tR[i]+=(v||0);}));
-  mkTotal('Total Previsto', tR);
-
-  mkSep('DESTINAÇÕES'); des.forEach(mkRow);
-  const tD=Array(12).fill(0); des.forEach(r=>r.values.forEach((v,i)=>{tD[i]+=(v||0);}));
-  mkTotal('Total Destinado', tD);
-
-  // Saldo acumulado: negativo = destinações antecipadas ainda não cobertas pela previsão
-  let carry=0; const saldoAcum=[];
-  for(let i=0;i<12;i++){ carry += (tR[i]-tD[i]); saldoAcum.push(carry); }
-  const trS=document.createElement('tr'); trS.className='saldo-row';
-  trS.innerHTML=`<td>SALDO ACUMULADO</td>`+saldoAcum.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('');
-  tb.appendChild(trS);
-
-  const menorSaldo = Math.min(0, ...saldoAcum);
+  const menorSaldo = Math.min(0, ...saldoAcum, 0);
   const nota = document.getElementById('decimoNota');
   if (menorSaldo < 0) {
-    nota.innerHTML = `💡 Você antecipou <strong>${fmtF(Math.abs(menorSaldo))}</strong> em destinações antes de receber o 13º — é como um empréstimo de você mesmo, a repor (ex: nos investimentos) quando as parcelas caírem em novembro/dezembro.`;
+    nota.innerHTML = `💡 Você antecipou <strong>${fmtF(Math.abs(menorSaldo))}</strong> em destinações antes de receber o 13º — é como um empréstimo de você mesmo, a repor (ex: nos investimentos) quando a previsão daquele ano cair.`;
   } else {
-    nota.innerHTML = `💡 Lance aqui as parcelas previstas do 13º (em "Previsão a receber") e para onde esse dinheiro vai (em "Destinações"). Se você gastar ou investir antes de receber, o Saldo Acumulado fica negativo até novembro — sinalizando quanto repor depois.`;
+    nota.innerHTML = `💡 Cada coluna é um ano. Lance as parcelas previstas em "Previsão a receber" e para onde esse dinheiro vai em "Destinações". Se você destinar algo num ano antes de a previsão cair, o Saldo Acumulado fica negativo — sinalizando quanto repor depois.`;
   }
 }
-function updateDecimoCell(id,i,raw) {
+function updateDecimoCell(id,ano,raw) {
   const r=state.decimoRows.find(x=>x.id===id); if(!r) return;
+  if(!r.values) r.values={};
   const newVal = pv(raw);
-  if (r.values[i] === newVal) return;
-  r.values[i]=newVal;
-  if (!r.paid) r.paid = Array(12).fill(false);
-  r.paid[i] = false;
+  if ((r.values[ano]||0) === newVal) return;
+  r.values[ano]=newVal;
+  if (!r.paid) r.paid = {};
+  r.paid[ano] = false;
   save(); renderDecimo();
 }
-function toggleDecimoPaid(id,i) {
+function toggleDecimoPaid(id,ano) {
   const r=state.decimoRows.find(x=>x.id===id); if(!r) return;
-  if (!r.paid) r.paid = Array(12).fill(false);
-  r.paid[i] = !r.paid[i];
+  if (!r.paid) r.paid = {};
+  r.paid[ano] = !r.paid[ano];
   save(); renderDecimo();
 }
 function deleteDecimoRow(id) {
@@ -1168,7 +1163,23 @@ function deleteDecimoRow(id) {
 function openAddDecimoRow(type) {
   const name = prompt(type==='receita' ? 'Nome da previsão (ex: 1ª parcela, Adiantamento...):' : 'Nome da destinação (ex: Repor investimento, Viagem, Presentes...):');
   if(!name) return;
-  state.decimoRows.push({id:gid(),name:name.trim(),type,values:Array(12).fill(0),paid:Array(12).fill(false)});
+  state.decimoRows.push({id:gid(),name:name.trim(),type,values:{},paid:{}});
+  save(); renderDecimo();
+}
+function addDecimoYear() {
+  const anos = state.decimoYears||[];
+  const sugestao = anos.length ? Math.max(...anos)+1 : new Date().getFullYear();
+  const y = prompt('Adicionar coluna para qual ano?', sugestao);
+  if (!y) return;
+  const yn = parseInt(y);
+  if (!yn || anos.includes(yn)) return;
+  state.decimoYears.push(yn);
+  save(); renderDecimo();
+}
+function removeDecimoYear(ano) {
+  if(!confirm(`Remover a coluna ${ano}? Os valores lançados nesse ano serão perdidos.`)) return;
+  state.decimoYears = (state.decimoYears||[]).filter(a=>a!==ano);
+  state.decimoRows.forEach(r=>{ if(r.values) delete r.values[ano]; if(r.paid) delete r.paid[ano]; });
   save(); renderDecimo();
 }
 
