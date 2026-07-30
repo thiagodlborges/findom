@@ -367,10 +367,13 @@
 
   <div class="page-header">
     <h2 style="font-size:1rem">Progresso mensal</h2>
-    <div class="year-nav">
-      <button onclick="changeCasaYear(-1)">‹</button>
-      <span id="casaYearDisplay"></span>
-      <button onclick="changeCasaYear(1)">›</button>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="add-row-btn" onclick="openAddCasaInvestimento()">＋ Investimento</button>
+      <div class="year-nav">
+        <button onclick="changeCasaYear(-1)">‹</button>
+        <span id="casaYearDisplay"></span>
+        <button onclick="changeCasaYear(1)">›</button>
+      </div>
     </div>
   </div>
   <div class="table-wrap">
@@ -556,6 +559,7 @@ let state = {
   casaObjetivo: { valorCasa:0, valorTerreno:0, percentual:35 },
   casaYear: new Date().getFullYear(),
   casaProgresso: {},
+  casaInvestimentos: [],
   weeks: 3,
   gsApiKey: '',
   gsSheetId: '',
@@ -608,6 +612,17 @@ function applyDefaults() {
   if (!state.casaObjetivo) state.casaObjetivo = { valorCasa:0, valorTerreno:0, percentual:35 };
   if (!state.casaYear) state.casaYear = new Date().getFullYear();
   if (!state.casaProgresso) state.casaProgresso = {};
+  if (!state.casaInvestimentos?.length) {
+    state.casaInvestimentos = [];
+    if (Object.keys(state.casaProgresso).length) {
+      // migra o formato antigo (linha única) para múltiplas linhas de investimento
+      const linha = {id:gid(), nome:'Investimento 1', valores:{}};
+      Object.keys(state.casaProgresso).forEach(ano=>{ linha.valores[ano] = state.casaProgresso[ano]; });
+      state.casaInvestimentos.push(linha);
+    } else {
+      state.casaInvestimentos.push({id:gid(), nome:'Investimento 1', valores:{}});
+    }
+  }
   if (!state.cotaYear) state.cotaYear = new Date().getFullYear();
   if (!state.weeks) state.weeks = 3;
   // Migrate: convert pessoa.cota (number) → pessoa.cotaHistorico (array)
@@ -1238,19 +1253,22 @@ function casaObjetivoValor() {
   const o = state.casaObjetivo || {};
   return ((o.valorCasa||0)+(o.valorTerreno||0)) * ((o.percentual||0)/100);
 }
+function casaTotalPorMes(ano) {
+  const tot = Array(12).fill(0);
+  (state.casaInvestimentos||[]).forEach(r=>{
+    const arr = r.valores?.[ano];
+    if (arr) arr.forEach((v,i)=>{ tot[i]+=(v||0); });
+  });
+  return tot;
+}
 function casaValorAtual() {
   let max = 0;
-  Object.values(state.casaProgresso||{}).forEach(arr=>{
-    (arr||[]).forEach(v=>{ if((v||0)>max) max=v; });
+  const anos = new Set();
+  (state.casaInvestimentos||[]).forEach(r=>Object.keys(r.valores||{}).forEach(a=>anos.add(a)));
+  anos.forEach(ano=>{
+    casaTotalPorMes(ano).forEach(v=>{ if (v>max) max=v; });
   });
   return max;
-}
-function getCasaAno(ano, criar) {
-  if (!state.casaProgresso[ano]) {
-    if (!criar) return null;
-    state.casaProgresso[ano] = Array(12).fill(0);
-  }
-  return state.casaProgresso[ano];
 }
 function changeCasaYear(d) { state.casaYear+=d; save(); renderCasa(); }
 function updateCasaObjetivo(campo, valor) {
@@ -1258,9 +1276,22 @@ function updateCasaObjetivo(campo, valor) {
   state.casaObjetivo[campo] = pv(valor);
   save(); renderCasa();
 }
-function updateCasaCell(i, raw) {
-  const arr = getCasaAno(state.casaYear, true);
-  arr[i] = pv(raw);
+function updateCasaCell(rowId, mes, raw) {
+  const r = (state.casaInvestimentos||[]).find(x=>x.id===rowId); if (!r) return;
+  if (!r.valores) r.valores = {};
+  if (!r.valores[state.casaYear]) r.valores[state.casaYear] = Array(12).fill(0);
+  r.valores[state.casaYear][mes] = pv(raw);
+  save(); renderCasa();
+}
+function openAddCasaInvestimento() {
+  const nome = prompt('Nome do investimento (ex: Tesouro Direto, CDB, Poupança...):');
+  if (!nome) return;
+  state.casaInvestimentos.push({id:gid(), nome:nome.trim(), valores:{}});
+  save(); renderCasa();
+}
+function deleteCasaInvestimento(id) {
+  if (!confirm('Excluir esta linha de investimento?')) return;
+  state.casaInvestimentos = (state.casaInvestimentos||[]).filter(r=>r.id!==id);
   save(); renderCasa();
 }
 function renderCasa() {
@@ -1287,25 +1318,40 @@ function renderCasa() {
       <span class="proj-total-value">${fmtF(Math.abs(falta))}</span>
     </div>`;
 
-  const arr = getCasaAno(state.casaYear, true);
+  const ano = state.casaYear;
   const tb = document.getElementById('casaTableBody');
   tb.innerHTML = '';
 
-  const trVal = document.createElement('tr');
-  trVal.innerHTML = `<td>💰 Valor guardado</td>` + arr.map((v,i)=>`<td class="editable"><div class="cell-wrap">
-    <input class="cell-input" value="${v||''}" placeholder="—"
-      onblur="updateCasaCell(${i},this.value)" onfocus="this.select()"></div></td>`).join('');
-  tb.appendChild(trVal);
+  (state.casaInvestimentos||[]).forEach(row=>{
+    const arr = row.valores?.[ano] || Array(12).fill(0);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><button class="del-btn" onclick="deleteCasaInvestimento('${row.id}')" title="Excluir">✕</button>${row.nome}</td>` +
+      arr.map((v,i)=>`<td class="editable"><div class="cell-wrap">
+        <input class="cell-input" value="${v||''}" placeholder="—"
+          onblur="updateCasaCell('${row.id}',${i},this.value)" onfocus="this.select()"></div></td>`).join('');
+    tb.appendChild(tr);
+  });
+
+  if (!(state.casaInvestimentos||[]).length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="13" style="color:var(--muted);text-align:center">Nenhum investimento cadastrado. Clique em ＋ Investimento para começar.</td>`;
+    tb.appendChild(tr);
+  }
+
+  const totalArr = casaTotalPorMes(ano);
+  const trTotal = document.createElement('tr'); trTotal.className='total-row';
+  trTotal.innerHTML = `<td>Total guardado</td>` + totalArr.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('');
+  tb.appendChild(trTotal);
 
   const trPct = document.createElement('tr'); trPct.className='total-row';
-  trPct.innerHTML = `<td>% do objetivo</td>` + arr.map(v=>{
+  trPct.innerHTML = `<td>% do objetivo</td>` + totalArr.map(v=>{
     const p = objetivo>0 ? (v/objetivo*100) : 0;
     return `<td>${v>0?p.toFixed(1)+'%':'—'}</td>`;
   }).join('');
   tb.appendChild(trPct);
 
   const trFalta = document.createElement('tr'); trFalta.className='saldo-row';
-  trFalta.innerHTML = `<td>Falta</td>` + arr.map(v=>{
+  trFalta.innerHTML = `<td>Falta</td>` + totalArr.map(v=>{
     const f = objetivo - v;
     return `<td class="${v>0?cc(-f):''}">${v>0?fmt(f):'—'}</td>`;
   }).join('');
