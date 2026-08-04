@@ -340,6 +340,13 @@
   </div>
   <div class="table-wrap" id="decimoTableWrap"></div>
   <div id="decimoNota" style="margin-top:10px;padding:9px 12px;background:rgba(122,79,46,.06);border:1px solid rgba(122,79,46,.18);border-radius:8px;font-size:.73rem;color:var(--muted);line-height:1.7"></div>
+
+  <div class="page-header" style="margin-top:26px">
+    <h2 style="font-size:1rem">📦 Parcelamentos antecipados</h2>
+    <button class="add-row-btn" onclick="openParcelamentoModal()">＋ Novo parcelamento</button>
+  </div>
+  <div id="parcelamentoResumo" style="margin-bottom:14px"></div>
+  <div id="parcelamentosContainer"></div>
 </div>
 
 <!-- CASA PRÓPRIA -->
@@ -539,6 +546,43 @@
   </div>
 </div>
 
+<!-- MODAL: PARCELAMENTO 13º -->
+<div class="modal-overlay" id="modalParcelamento">
+  <div class="modal">
+    <h3>Novo Parcelamento</h3>
+    <div class="modal-field"><label>Descrição</label><input id="pcDesc" placeholder="Ex: Móveis novos, Reforma..."></div>
+    <div class="modal-2col">
+      <div class="modal-field"><label>Valor total (R$)</label><input id="pcValor" type="text" inputmode="decimal" placeholder="0,00" oninput="calcParcelamentoPreview()"></div>
+      <div class="modal-field"><label>Nº de parcelas</label><input id="pcParcelas" type="number" placeholder="1" min="1" value="1" oninput="calcParcelamentoPreview()"></div>
+    </div>
+    <div class="modal-2col">
+      <div class="modal-field">
+        <label>Mês da 1ª parcela</label>
+        <select id="pcMesInicial" onchange="calcParcelamentoPreview()">
+          <option value="0">Janeiro</option><option value="1">Fevereiro</option><option value="2">Março</option>
+          <option value="3">Abril</option><option value="4">Maio</option><option value="5">Junho</option>
+          <option value="6">Julho</option><option value="7">Agosto</option><option value="8">Setembro</option>
+          <option value="9">Outubro</option><option value="10">Novembro</option><option value="11">Dezembro</option>
+        </select>
+      </div>
+      <div class="modal-field"><label>Ano da 1ª parcela</label><input id="pcAnoInicial" type="number" oninput="calcParcelamentoPreview()"></div>
+    </div>
+    <div class="modal-field">
+      <label>Referente ao 13º de qual ano?</label>
+      <input id="pcAnoDecimo" type="number" oninput="calcParcelamentoPreview()">
+    </div>
+    <div style="font-size:.71rem;color:var(--muted);margin-bottom:8px;line-height:1.6">
+      Parcelas até novembro do ano do 13º entram como <strong>antecipadas</strong> (a repor depois);
+      de dezembro em diante entram como <strong>cobertas</strong> pelo 13º. Dá pra ajustar cada parcela manualmente depois.
+    </div>
+    <div class="parcela-preview" id="pcPreview" style="display:none"></div>
+    <div class="modal-btns">
+      <button class="btn btn-accent" onclick="addParcelamento()">Lançar</button>
+      <button class="btn btn-ghost" onclick="closeModal('modalParcelamento')">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const MONTHS     = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const MONTHS_F   = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -556,6 +600,7 @@ let state = {
   projCats: [],
   decimoRows: [],
   decimoYears: [],
+  decimoParcelamentos: [],
   casaObjetivo: { valorCasa:0, valorTerreno:0, percentual:35 },
   casaYear: new Date().getFullYear(),
   casaProgresso: {},
@@ -609,6 +654,7 @@ function applyDefaults() {
     {id:gid(),name:'2ª parcela',type:'receita',values:{},paid:{}},
   ];
   if (!state.decimoYears?.length) state.decimoYears = [new Date().getFullYear()];
+  if (!state.decimoParcelamentos) state.decimoParcelamentos = [];
   if (!state.casaObjetivo) state.casaObjetivo = { valorCasa:0, valorTerreno:0, percentual:35 };
   if (!state.casaYear) state.casaYear = new Date().getFullYear();
   if (!state.casaProgresso) state.casaProgresso = {};
@@ -1177,7 +1223,8 @@ function renderDecimo() {
   function mkTotal(label, tots) { return `<tr class="total-row"><td>${label}</td>`+tots.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('')+`</tr>`; }
 
   const tR = anos.map(ano=>rec.reduce((s,r)=>s+(r.values?.[ano]||0),0));
-  const tD = anos.map(ano=>des.reduce((s,r)=>s+(r.values?.[ano]||0),0));
+  const parcPorAno = ano => (state.decimoParcelamentos||[]).filter(p=>p.anoDecimo===ano).reduce((s,p)=>s+p.valorTotal,0);
+  const tD = anos.map(ano=>des.reduce((s,r)=>s+(r.values?.[ano]||0),0) + parcPorAno(ano));
   let carry=0; const saldoAcum = tR.map((v,i)=>{ carry += (v-tD[i]); return carry; });
 
   const theadCols = anos.map(ano=>`<th>${ano} <span style="cursor:pointer;opacity:.45" onclick="removeDecimoYear(${ano})" title="Remover coluna ${ano}">✕</span></th>`).join('');
@@ -1188,6 +1235,10 @@ function renderDecimo() {
   body += mkTotal('Total Previsto', tR);
   body += mkSep('DESTINAÇÕES');
   body += des.map(mkRow).join('');
+  const temParcelamentos = (state.decimoParcelamentos||[]).length > 0;
+  if (temParcelamentos) {
+    body += `<tr style="opacity:.85"><td>🔒 Parcelamentos (ver abaixo)</td>`+anos.map(ano=>`<td>${parcPorAno(ano)>0?fmt(parcPorAno(ano)):'—'}</td>`).join('')+`</tr>`;
+  }
   body += mkTotal('Total Destinado', tD);
   body += `<tr class="saldo-row"><td>SALDO ACUMULADO</td>`+saldoAcum.map(v=>`<td class="${cc(v)}">${fmt(v)}</td>`).join('')+`</tr>`;
 
@@ -1204,6 +1255,8 @@ function renderDecimo() {
   } else {
     nota.innerHTML = `💡 Cada coluna é um ano. Lance as parcelas previstas em "Previsão a receber" e para onde esse dinheiro vai em "Destinações". Se você destinar algo num ano antes de a previsão cair, o Saldo Acumulado fica negativo — sinalizando quanto repor depois.`;
   }
+
+  renderParcelamentos();
 }
 function updateDecimoCell(id,ano,raw) {
   const r=state.decimoRows.find(x=>x.id===id); if(!r) return;
@@ -1246,6 +1299,128 @@ function removeDecimoYear(ano) {
   state.decimoYears = (state.decimoYears||[]).filter(a=>a!==ano);
   state.decimoRows.forEach(r=>{ if(r.values) delete r.values[ano]; if(r.paid) delete r.paid[ano]; });
   save(); renderDecimo();
+}
+
+// ── PARCELAMENTOS DO 13º ────────────────────────────────────
+function openParcelamentoModal() {
+  document.getElementById('pcDesc').value='';
+  document.getElementById('pcValor').value='';
+  document.getElementById('pcParcelas').value='1';
+  document.getElementById('pcMesInicial').value=new Date().getMonth();
+  const anoRef = (state.decimoYears?.length ? Math.max(...state.decimoYears) : new Date().getFullYear());
+  document.getElementById('pcAnoInicial').value=new Date().getFullYear();
+  document.getElementById('pcAnoDecimo').value=anoRef;
+  document.getElementById('pcPreview').style.display='none';
+  document.getElementById('pcPreview').innerHTML='';
+  openModal('modalParcelamento');
+  setTimeout(()=>document.getElementById('pcDesc').focus(),60);
+}
+function classificaParcela(ano, mes, anoDecimo) {
+  // Jan–Nov do ano do 13º (ou qualquer data anterior) = antecipada; Dez em diante = coberta
+  if (ano < anoDecimo) return 'antecipada';
+  if (ano === anoDecimo) return mes <= 10 ? 'antecipada' : 'coberta';
+  return 'coberta';
+}
+function calcParcelamentoPreview() {
+  const total = pv(document.getElementById('pcValor').value);
+  const n = Math.max(1, parseInt(document.getElementById('pcParcelas').value)||1);
+  const mesIni = parseInt(document.getElementById('pcMesInicial').value);
+  const anoIni = parseInt(document.getElementById('pcAnoInicial').value) || new Date().getFullYear();
+  const anoDecimo = parseInt(document.getElementById('pcAnoDecimo').value) || anoIni;
+  const vp = n>0 && total>0 ? total/n : 0;
+
+  if (total>0 && n>0) {
+    let html='';
+    for (let i=0;i<n;i++) {
+      const abs = mesIni+i;
+      const yr = anoIni + Math.floor(abs/12);
+      const mo = abs%12;
+      const tipo = classificaParcela(yr, mo, anoDecimo);
+      const cor = tipo==='antecipada' ? 'var(--red)' : 'var(--green)';
+      const label = tipo==='antecipada' ? 'antecipada' : 'coberta';
+      html += `${MONTHS_F[mo]}/${yr}: ${fmtF(vp)} — <span style="color:${cor};font-weight:600">${label}</span><br>`;
+    }
+    const prev=document.getElementById('pcPreview');
+    prev.innerHTML=html; prev.style.display='block';
+  } else {
+    document.getElementById('pcPreview').style.display='none';
+  }
+}
+function addParcelamento() {
+  const desc = document.getElementById('pcDesc').value.trim();
+  const total = pv(document.getElementById('pcValor').value);
+  const n = Math.max(1, parseInt(document.getElementById('pcParcelas').value)||1);
+  const mesIni = parseInt(document.getElementById('pcMesInicial').value);
+  const anoIni = parseInt(document.getElementById('pcAnoInicial').value) || new Date().getFullYear();
+  const anoDecimo = parseInt(document.getElementById('pcAnoDecimo').value) || anoIni;
+  if (!desc || !total) { alert('Preencha descrição e valor.'); return; }
+  const valorParcela = total/n;
+  const parcelas = [];
+  for (let i=0;i<n;i++) {
+    const abs = mesIni+i;
+    const yr = anoIni + Math.floor(abs/12);
+    const mo = abs%12;
+    parcelas.push({ ano:yr, mes:mo, tipo:classificaParcela(yr,mo,anoDecimo), paga:false });
+  }
+  state.decimoParcelamentos.push({ id:gid(), desc, anoDecimo, valorTotal:total, numParcelas:n, valorParcela, parcelas });
+  save(); closeModal('modalParcelamento'); renderDecimo();
+}
+function deleteParcelamento(id) {
+  if (!confirm('Excluir este parcelamento?')) return;
+  state.decimoParcelamentos = state.decimoParcelamentos.filter(p=>p.id!==id);
+  save(); renderDecimo();
+}
+function toggleParcelaTipo(id, i) {
+  const p = state.decimoParcelamentos.find(x=>x.id===id); if (!p) return;
+  p.parcelas[i].tipo = p.parcelas[i].tipo==='antecipada' ? 'coberta' : 'antecipada';
+  save(); renderDecimo();
+}
+function toggleParcelaPaga(id, i) {
+  const p = state.decimoParcelamentos.find(x=>x.id===id); if (!p) return;
+  p.parcelas[i].paga = !p.parcelas[i].paga;
+  save(); renderDecimo();
+}
+function renderParcelamentos() {
+  const cont = document.getElementById('parcelamentosContainer');
+  const resumo = document.getElementById('parcelamentoResumo');
+  if (!cont || !resumo) return;
+  const lista = state.decimoParcelamentos||[];
+
+  let totalAntecipadoGlobal=0, totalCobertoGlobal=0, totalAntecipadoPagoGlobal=0;
+  lista.forEach(p=>p.parcelas.forEach(pc=>{
+    if (pc.tipo==='antecipada') { totalAntecipadoGlobal+=p.valorParcela; if(pc.paga) totalAntecipadoPagoGlobal+=p.valorParcela; }
+    else totalCobertoGlobal+=p.valorParcela;
+  }));
+
+  resumo.innerHTML = `
+    <div class="proj-result" style="margin-bottom:0">
+      <div class="proj-item"><span class="proj-item-label">💸 Total antecipado (a repor no 13º)</span><span class="proj-item-value" style="color:var(--red)">${fmtF(totalAntecipadoGlobal)}</span></div>
+      <div class="proj-item"><span class="proj-item-label">↳ já pago (já tirei dos investimentos)</span><span class="proj-item-value">${fmtF(totalAntecipadoPagoGlobal)}</span></div>
+      <div class="proj-item"><span class="proj-item-label">📥 Total coberto direto pelo 13º</span><span class="proj-item-value" style="color:var(--green)">${fmtF(totalCobertoGlobal)}</span></div>
+    </div>`;
+
+  if (!lista.length) {
+    cont.innerHTML = `<div style="color:var(--muted);font-size:.85rem;padding:10px 2px">Nenhum parcelamento cadastrado. Use ＋ Novo parcelamento para compras que você vai pagar antes e/ou depois de receber o 13º.</div>`;
+    return;
+  }
+
+  cont.innerHTML = lista.map(p=>{
+    const chips = p.parcelas.map((pc,i)=>{
+      const corBg = pc.tipo==='antecipada' ? 'rgba(158,58,42,.10)' : 'rgba(74,110,63,.12)';
+      const corTx = pc.tipo==='antecipada' ? 'var(--red)' : 'var(--green)';
+      const tipoLabel = pc.tipo==='antecipada' ? 'Antes (repor)' : 'Depois (direto)';
+      return `<div style="border:1px solid var(--border);border-radius:9px;padding:8px 10px;min-width:104px;display:flex;flex-direction:column;gap:5px">
+        <span style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted)">${MONTHS[pc.mes]}/${String(pc.ano).slice(2)} · ${fmtF(p.valorParcela)}</span>
+        <button onclick="toggleParcelaTipo('${p.id}',${i})" style="font-size:.63rem;padding:3px 7px;border-radius:6px;border:1px solid var(--border);background:${corBg};color:${corTx};font-weight:600;cursor:pointer">${tipoLabel}</button>
+        <button class="pay-btn ${pc.paga?'is-paid':''}" style="font-size:.63rem" onclick="toggleParcelaPaga('${p.id}',${i})">${pc.paga?'✓ paga':'○ a pagar'}</button>
+      </div>`;
+    }).join('');
+    return `<div class="gs-config">
+      <h3>${p.desc} <button class="del-btn" onclick="deleteParcelamento('${p.id}')" title="Excluir">✕</button></h3>
+      <p>${p.numParcelas}x de ${fmtF(p.valorParcela)} — referente ao 13º de ${p.anoDecimo}</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${chips}</div>
+    </div>`;
+  }).join('');
 }
 
 // ── CASA PRÓPRIA ─────────────────────────────────────────────
