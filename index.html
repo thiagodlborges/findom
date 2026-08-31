@@ -703,13 +703,15 @@ function threeWayMergeValue(base, ours, theirs) {
       return mergeObj(isPlainObj(base) ? base : {}, ours, theirs);
     }
     // valores simples (número, texto, booleano): se só um lado mudou em relação ao
-    // que tinha antes, usa quem mudou; se os dois mudaram para coisas diferentes,
-    // fica com o que já está confirmado na nuvem (evita apagar um salvamento alheio).
+    // que tinha antes, usa quem mudou; se os dois mudaram para coisas diferentes ao
+    // mesmo tempo (raro), fica com a mudança que você acabou de fazer agora — a nuvem
+    // pode estar entregando uma resposta desatualizada, e não queremos que isso reverta
+    // silenciosamente algo que você mudou de propósito.
     if (JSON.stringify(ours) === JSON.stringify(base)) return theirs;
     if (JSON.stringify(theirs) === JSON.stringify(base)) return ours;
-    return theirs;
+    return ours;
   } catch(e) {
-    return theirs !== undefined ? theirs : ours; // em caso de formato inesperado, não arrisca corromper dado
+    return ours !== undefined ? ours : theirs; // em caso de formato inesperado, não arrisca corromper dado
   }
 }
 function isPlainObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
@@ -830,14 +832,17 @@ async function saveToCloud(keepalive) {
     return;
   }
 
+  let toSend = state;
   try {
     // 1. Busca o que está na nuvem agora, pra ver se o outro dispositivo salvou algo
     //    desde a última vez que este aparelho sincronizou.
-    const rGet = await fetch(STATE_FN, { method:'GET', headers:{'x-app-token':token} });
+    //    cache:'no-store' é essencial aqui: sem isso, o navegador podia devolver uma
+    //    resposta antiga guardada em cache, fazendo o app achar que havia um conflito
+    //    e reverter uma mudança que você acabou de fazer (ex: trocar de ano).
+    const rGet = await fetch(STATE_FN, { method:'GET', headers:{'x-app-token':token}, cache:'no-store' });
     const dGet = await rGet.json();
     const remote = (dGet.ok && dGet.state) ? dGet.state : null;
 
-    let toSend = state;
     if (remote && _lastSyncedState && JSON.stringify(remote) !== JSON.stringify(_lastSyncedState)) {
       // Alguém mais salvou no meio tempo -> mescla em vez de sobrescrever o que a outra pessoa fez.
       const merged = threeWayMergeValue(_lastSyncedState, state, remote);
@@ -848,11 +853,18 @@ async function saveToCloud(keepalive) {
       reRenderTudo();
       showSaveStatus('🔄 Mesclado com o outro dispositivo', 'ok');
     }
+  } catch(e) {
+    // Não deu pra checar mudanças remotas agora (rede instável, etc.) — isso NÃO deve
+    // impedir o salvamento normal. Segue e manda o estado local mesmo, como sempre fez.
+    console.warn('Falha ao verificar mudanças remotas antes de salvar (seguindo sem mesclar):', e);
+  }
 
+  try {
     const r = await fetch(STATE_FN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-app-token': token },
-      body: JSON.stringify({ state: toSend })
+      body: JSON.stringify({ state: toSend }),
+      cache: 'no-store'
     });
     const d = await r.json();
     if (d.ok) {
@@ -1187,7 +1199,10 @@ function renderCotas() {
       deps.forEach(d=>{
         const tr=document.createElement('tr');
         tr.innerHTML=`<td><button class="del-btn" onclick="deleteCotaDespesa('${d.id}')" title="Excluir">✕</button>${d.desc}</td>`
-          +d.monthValues.map(v=>`<td class="${v>0?'neg':''}">${v>0?fmt(v):'—'}</td>`).join('');
+          +d.monthValues.map((v,i)=>`<td class="editable"><div class="cell-wrap">
+            <input class="cell-input ${v>0?'neg':''}" value="${v||''}" placeholder="—"
+              onblur="updateCotaDespesaCell('${d.id}',${i},this.value)" onfocus="this.select()">
+          </div></td>`).join('');
         tb.appendChild(tr);
       });
     }
@@ -1317,6 +1332,11 @@ function addCotaDespesa() {
 function deleteCotaDespesa(id) {
   if(!confirm('Excluir esta despesa da cota?')) return;
   state.cotaDespesas=state.cotaDespesas.filter(d=>d.id!==id);
+  save(); renderCotas();
+}
+function updateCotaDespesaCell(id, i, raw) {
+  const d = state.cotaDespesas.find(x=>x.id===id); if (!d) return;
+  d.monthValues[i] = pv(raw);
   save(); renderCotas();
 }
 
