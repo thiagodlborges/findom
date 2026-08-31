@@ -905,16 +905,39 @@ function showSaveStatus(msg, type) {
   el._t = setTimeout(() => { el.style.opacity = '0'; }, 2500);
 }
 
-// Migrate: ensure every row has paid and comments arrays
+// Migra linhas do Anual do formato antigo (um array fixo de 12 valores, igual em
+// qualquer ano) pro novo formato por ano: { 2026:[12 valores], 2027:[12 valores], ... }.
+// Sem isso, trocar de ano nunca mudava os dados — 2027 sempre mostrava exatamente
+// os mesmos números de 2026, porque não existia essa separação por ano.
 function ensurePaid() {
+  const anoAtual = state.year || new Date().getFullYear();
   state.rows.forEach(r => {
-    if (!r.paid    || r.paid.length    !== 12) r.paid     = Array(12).fill(false);
-    if (!r.comments|| r.comments.length!== 12) r.comments = Array(12).fill('');
+    if (Array.isArray(r.values)) {
+      const oldValues = r.values;
+      const oldPaid = Array.isArray(r.paid) ? r.paid : Array(12).fill(false);
+      const oldComments = Array.isArray(r.comments) ? r.comments : Array(12).fill('');
+      r.values = { [anoAtual]: oldValues };
+      r.paid = { [anoAtual]: oldPaid };
+      r.comments = { [anoAtual]: oldComments };
+    } else {
+      if (!r.values) r.values = {};
+      if (!r.paid) r.paid = {};
+      if (!r.comments) r.comments = {};
+    }
   });
   (state.decimoRows||[]).forEach(r => {
     if (!r.values || Array.isArray(r.values)) r.values = {};
     if (!r.paid   || Array.isArray(r.paid))   r.paid   = {};
   });
+}
+// Retorna (e cria se ainda não existir) o array de 12 meses de um campo da linha
+// para um ano específico. É assim que cada ano passa a ter seus próprios valores.
+function rowYearArr(row, year, kind) {
+  if (!row[kind]) row[kind] = {};
+  if (!row[kind][year]) {
+    row[kind][year] = kind==='comments' ? Array(12).fill('') : (kind==='paid' ? Array(12).fill(false) : Array(12).fill(0));
+  }
+  return row[kind][year];
 }
 
 function fmt(v)  { if(!v||isNaN(v)||v===0) return '—'; return Number(v).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:2}); }
@@ -959,12 +982,16 @@ function renderTable() {
   tb.innerHTML = '';
   const rec = state.rows.filter(r=>r.type==='receita');
   const des = state.rows.filter(r=>r.type==='despesa');
+  const ano = state.year;
 
   function mkRow(row) {
+    const vals = rowYearArr(row, ano, 'values');
+    const paidArr = rowYearArr(row, ano, 'paid');
+    const cmntArr = rowYearArr(row, ano, 'comments');
     const tr = document.createElement('tr');
-    const cells = row.values.map((v,i) => {
+    const cells = vals.map((v,i) => {
       const haVal = v && v !== 0;
-      const isPaid = haVal && (row.paid?.[i] === true);
+      const isPaid = haVal && (paidArr[i] === true);
       const inputCls = haVal ? (isPaid ? 'paid' : 'pending') : '';
       const btnLabel = isPaid ? '✓ pago' : '○';
       const btnCls   = isPaid ? 'pay-btn is-paid' : 'pay-btn';
@@ -974,10 +1001,10 @@ function renderTable() {
       const replBtn = haVal && i < 11
         ? `<button class="repl-btn" onclick="replicateFrom('${row.id}',${i})" title="Replicar este valor para os meses seguintes até dezembro">⟳</button>`
         : '';
-      const hasCmnt = !!(row.comments?.[i]);
+      const hasCmnt = !!(cmntArr[i]);
       const cmntCls = 'cmnt-btn' + (hasCmnt ? ' has-cmnt' : '');
       const cmntBtn = haVal
-        ? `<button class="${cmntCls}" onclick="openComment(event,'${row.id}',${i})" title="${hasCmnt ? row.comments[i] : 'Adicionar comentário'}">💬<span class="cmnt-dot"></span></button>`
+        ? `<button class="${cmntCls}" onclick="openComment(event,'${row.id}',${i})" title="${hasCmnt ? cmntArr[i] : 'Adicionar comentário'}">💬<span class="cmnt-dot"></span></button>`
         : '';
       return `<td class="editable"><div class="cell-wrap">
         <input class="cell-input ${inputCls}" value="${v||''}" placeholder="—"
@@ -999,11 +1026,11 @@ function renderTable() {
   }
 
   mkSep('RECEITAS'); rec.forEach(mkRow);
-  const tR=Array(12).fill(0); rec.forEach(r=>r.values.forEach((v,i)=>{tR[i]+=(v||0);}));
+  const tR=Array(12).fill(0); rec.forEach(r=>rowYearArr(r,ano,'values').forEach((v,i)=>{tR[i]+=(v||0);}));
   mkTotal('Total Receitas', tR);
 
   mkSep('DESPESAS'); des.forEach(mkRow);
-  const tD=Array(12).fill(0); des.forEach(r=>r.values.forEach((v,i)=>{tD[i]+=(v||0);}));
+  const tD=Array(12).fill(0); des.forEach(r=>rowYearArr(r,ano,'values').forEach((v,i)=>{tD[i]+=(v||0);}));
   mkTotal('Total Despesas', tD);
 
   const saldos=tR.map((r,i)=>r-tD[i]);
@@ -1013,31 +1040,33 @@ function renderTable() {
 }
 function updateCell(id,i,raw) {
   const r=state.rows.find(x=>x.id===id); if(!r) return;
+  const vals = rowYearArr(r, state.year, 'values');
   const newVal = pv(raw);
-  if (r.values[i] === newVal) return; // no change, skip
-  r.values[i]=newVal;
-  if (!r.paid) r.paid = Array(12).fill(false);
-  r.paid[i] = false;
+  if (vals[i] === newVal) return; // no change, skip
+  vals[i]=newVal;
+  const paidArr = rowYearArr(r, state.year, 'paid');
+  paidArr[i] = false;
   save();
   renderTable(); // safe here: onblur means field is already unfocused
 }
 function togglePaid(id,i) {
   const r=state.rows.find(x=>x.id===id); if(!r) return;
-  if (!r.paid) r.paid = Array(12).fill(false);
-  r.paid[i] = !r.paid[i];
+  const paidArr = rowYearArr(r, state.year, 'paid');
+  paidArr[i] = !paidArr[i];
   save(); renderTable();
 }
 
 function replicateFrom(id, fromMonth) {
   const r = state.rows.find(x=>x.id===id); if(!r) return;
-  const val = r.values[fromMonth];
+  const vals = rowYearArr(r, state.year, 'values');
+  const val = vals[fromMonth];
   if (!val) return;
   const remaining = 11 - fromMonth; // months after fromMonth
   if (!confirm(`Replicar ${fmtF(val)} para os ${remaining} meses seguintes (${MONTHS[fromMonth+1]} a Dez)?`)) return;
+  const paidArr = rowYearArr(r, state.year, 'paid');
   for (let i = fromMonth + 1; i < 12; i++) {
-    r.values[i] = val;
-    if (!r.paid) r.paid = Array(12).fill(false);
-    r.paid[i] = false; // reset paid for replicated months
+    vals[i] = val;
+    paidArr[i] = false; // reset paid for replicated months
   }
   save(); renderTable();
 }
@@ -1056,7 +1085,7 @@ function openComment(evt, rowId, mi) {
     closeComment(); return;
   }
   _cmnt = { rowId, mi };
-  ta.value = r?.comments?.[mi] || '';
+  ta.value = r ? (rowYearArr(r, state.year, 'comments')[mi] || '') : '';
 
   // Position popover near the button
   const rect = evt.currentTarget.getBoundingClientRect();
@@ -1074,8 +1103,8 @@ function openComment(evt, rowId, mi) {
 
 function saveComment() {
   const r = state.rows.find(x=>x.id===_cmnt.rowId); if(!r) return;
-  if (!r.comments) r.comments = Array(12).fill('');
-  r.comments[_cmnt.mi] = document.getElementById('cmntTextarea').value.trim();
+  const cmntArr = rowYearArr(r, state.year, 'comments');
+  cmntArr[_cmnt.mi] = document.getElementById('cmntTextarea').value.trim();
   save(); closeComment(); renderTable();
 }
 
@@ -1115,7 +1144,7 @@ function addRow() {
   const name=document.getElementById('modalName').value.trim();
   const type=document.getElementById('modalType').value;
   if(!name) return;
-  state.rows.push({id:gid(),name,type,values:Array(12).fill(0),paid:Array(12).fill(false),comments:Array(12).fill('')});
+  state.rows.push({id:gid(),name,type,values:{},paid:{},comments:{}});
   save(); closeModal('modalAddRow'); renderTable();
 }
 document.getElementById('modalName').addEventListener('keydown',e=>{if(e.key==='Enter')addRow();});
@@ -1735,8 +1764,8 @@ function renderProjecao() {
       <span class="proj-item-value ${v>0?'neg':''}">${v>0?fmtF(v):'—'}</span></div>`;
   });
 
-  const fixas = state.rows.filter(r=>r.type==='despesa').reduce((s,r)=>s+(r.values[fi]||0),0);
-  const recNextMonth = state.rows.filter(r=>r.type==='receita').reduce((s,r)=>s+(r.values[fi]||0),0);
+  const fixas = state.rows.filter(r=>r.type==='despesa').reduce((s,r)=>s+(rowYearArr(r,ano,'values')[fi]||0),0);
+  const recNextMonth = state.rows.filter(r=>r.type==='receita').reduce((s,r)=>s+(rowYearArr(r,ano,'values')[fi]||0),0);
   const saldoAnual = recNextMonth - fixas;
   const saldoFinal = saldoAnual - tot;
   const saldoColor = saldoFinal >= 0 ? 'var(--green)' : 'var(--red)';
