@@ -685,7 +685,7 @@ function applyDefaults() {
 // Evita que um dispositivo apague as mudanças do outro: em vez de simplesmente
 // sobrescrever o pacote de dados na nuvem, comparamos "o que tinha antes" (base),
 // "o que eu mudei" (ours) e "o que está na nuvem agora" (theirs) e combinamos os três.
-function threeWayMergeValue(base, ours, theirs) {
+function threeWayMergeValue(base, ours, theirs, key) {
   try {
     if (ours === undefined) return theirs;
     if (theirs === undefined) return ours;
@@ -695,9 +695,13 @@ function threeWayMergeValue(base, ours, theirs) {
       const b = Array.isArray(base) ? base : [];
       const allWithId = [...b, ...ours, ...theirs].every(x => x && typeof x === 'object' && 'id' in x);
       if (allWithId) return mergeArrayById(b, ours, theirs);
-      const allPrimitive = ours.every(x=>!x||typeof x!=='object') && theirs.every(x=>!x||typeof x!=='object');
-      if (allPrimitive) return mergeArrayAsSet(b, ours, theirs);
-      return mergeArrayByIndex(b, ours, theirs); // ex: parcelas de um parcelamento (sem id próprio)
+      // IMPORTANTE: a grande maioria dos arrays deste app é POSICIONAL — 12 valores
+      // (um por mês), 12 status de "pago", etc — onde o índice importa (índice 0 = Jan).
+      // Só a lista de anos do 13º (decimoYears) é de fato um conjunto sem ordem, onde
+      // faz sentido unir/deduplicar. Tratar arrays posicionais como conjunto (como uma
+      // versão anterior deste código fazia) embaralhava e destruía os 12 valores mensais.
+      if (key === 'decimoYears') return mergeArrayAsSet(b, ours, theirs);
+      return mergeArrayByIndex(b, ours, theirs, key);
     }
     if (isPlainObj(ours) && isPlainObj(theirs)) {
       return mergeObj(isPlainObj(base) ? base : {}, ours, theirs);
@@ -718,7 +722,7 @@ function isPlainObj(v) { return v && typeof v === 'object' && !Array.isArray(v);
 function mergeObj(base, ours, theirs) {
   const keys = new Set([...Object.keys(base||{}), ...Object.keys(ours||{}), ...Object.keys(theirs||{})]);
   const out = {};
-  keys.forEach(k => { out[k] = threeWayMergeValue(base?.[k], ours?.[k], theirs?.[k]); });
+  keys.forEach(k => { out[k] = threeWayMergeValue(base?.[k], ours?.[k], theirs?.[k], k); });
   return out;
 }
 function mergeArrayById(base, ours, theirs) {
@@ -746,11 +750,11 @@ function mergeArrayAsSet(base, ours, theirs) {
   });
   return out.sort((a,b)=> (a>b?1:a<b?-1:0));
 }
-function mergeArrayByIndex(base, ours, theirs) {
+function mergeArrayByIndex(base, ours, theirs, key) {
   const len = Math.max(base.length, ours.length, theirs.length);
   const out = [];
   for (let i=0;i<len;i++) {
-    if (i<ours.length && i<theirs.length) out.push(threeWayMergeValue(base[i], ours[i], theirs[i]));
+    if (i<ours.length && i<theirs.length) out.push(threeWayMergeValue(base[i], ours[i], theirs[i], key));
     else if (i<ours.length) out.push(ours[i]);
     else if (i<theirs.length) out.push(theirs[i]);
   }
