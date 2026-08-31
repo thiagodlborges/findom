@@ -681,7 +681,90 @@ function applyDefaults() {
   ensurePaid();
 }
 
+// ── MESCLAGEM DE 3 VIAS ──────────────────────────────────────
+// Evita que um dispositivo apague as mudanças do outro: em vez de simplesmente
+// sobrescrever o pacote de dados na nuvem, comparamos "o que tinha antes" (base),
+// "o que eu mudei" (ours) e "o que está na nuvem agora" (theirs) e combinamos os três.
+function threeWayMergeValue(base, ours, theirs) {
+  try {
+    if (ours === undefined) return theirs;
+    if (theirs === undefined) return ours;
+    if (JSON.stringify(ours) === JSON.stringify(theirs)) return ours;
+
+    if (Array.isArray(ours) && Array.isArray(theirs)) {
+      const b = Array.isArray(base) ? base : [];
+      const allWithId = [...b, ...ours, ...theirs].every(x => x && typeof x === 'object' && 'id' in x);
+      if (allWithId) return mergeArrayById(b, ours, theirs);
+      const allPrimitive = ours.every(x=>!x||typeof x!=='object') && theirs.every(x=>!x||typeof x!=='object');
+      if (allPrimitive) return mergeArrayAsSet(b, ours, theirs);
+      return mergeArrayByIndex(b, ours, theirs); // ex: parcelas de um parcelamento (sem id próprio)
+    }
+    if (isPlainObj(ours) && isPlainObj(theirs)) {
+      return mergeObj(isPlainObj(base) ? base : {}, ours, theirs);
+    }
+    // valores simples (número, texto, booleano): se só um lado mudou em relação ao
+    // que tinha antes, usa quem mudou; se os dois mudaram para coisas diferentes,
+    // fica com o que já está confirmado na nuvem (evita apagar um salvamento alheio).
+    if (JSON.stringify(ours) === JSON.stringify(base)) return theirs;
+    if (JSON.stringify(theirs) === JSON.stringify(base)) return ours;
+    return theirs;
+  } catch(e) {
+    return theirs !== undefined ? theirs : ours; // em caso de formato inesperado, não arrisca corromper dado
+  }
+}
+function isPlainObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
+function mergeObj(base, ours, theirs) {
+  const keys = new Set([...Object.keys(base||{}), ...Object.keys(ours||{}), ...Object.keys(theirs||{})]);
+  const out = {};
+  keys.forEach(k => { out[k] = threeWayMergeValue(base?.[k], ours?.[k], theirs?.[k]); });
+  return out;
+}
+function mergeArrayById(base, ours, theirs) {
+  const bm=new Map(base.map(x=>[x.id,x])), om=new Map(ours.map(x=>[x.id,x])), tm=new Map(theirs.map(x=>[x.id,x]));
+  const allIds = new Set([...bm.keys(), ...om.keys(), ...tm.keys()]);
+  const out = [];
+  allIds.forEach(id=>{
+    const inB=bm.has(id), inO=om.has(id), inT=tm.has(id);
+    if (inB && (!inO || !inT)) return;              // existia antes e um dos lados excluiu -> respeita a exclusão
+    if (!inO && !inT) return;                         // não existe em lugar nenhum
+    if (inO && !inT) { out.push(om.get(id)); return; } // só nós temos (item novo nosso)
+    if (!inO && inT) { out.push(tm.get(id)); return; } // só eles têm (item novo deles)
+    out.push(mergeObj(bm.get(id)||{}, om.get(id), tm.get(id))); // presente nos dois -> mescla os campos
+  });
+  return out;
+}
+function mergeArrayAsSet(base, ours, theirs) {
+  const bs=new Set(base), os=new Set(ours), ts=new Set(theirs);
+  const all=new Set([...base,...ours,...theirs]);
+  const out=[];
+  all.forEach(v=>{
+    const inB=bs.has(v), inO=os.has(v), inT=ts.has(v);
+    if (inB && (!inO || !inT)) return; // removido por um dos lados -> respeita a remoção
+    out.push(v);
+  });
+  return out.sort((a,b)=> (a>b?1:a<b?-1:0));
+}
+function mergeArrayByIndex(base, ours, theirs) {
+  const len = Math.max(base.length, ours.length, theirs.length);
+  const out = [];
+  for (let i=0;i<len;i++) {
+    if (i<ours.length && i<theirs.length) out.push(threeWayMergeValue(base[i], ours[i], theirs[i]));
+    else if (i<ours.length) out.push(ours[i]);
+    else if (i<theirs.length) out.push(theirs[i]);
+  }
+  return out;
+}
+function reRenderTudo() {
+  renderTable(); renderCotas();
+  if (typeof renderDecimo === 'function') renderDecimo();
+  if (typeof renderCasa === 'function') renderCasa();
+  if (typeof renderProjecao === 'function') renderProjecao();
+  if (typeof renderConfigPessoas === 'function') renderConfigPessoas();
+  if (typeof loadConfigInputs === 'function') loadConfigInputs();
+}
+
 // Load from Supabase (authoritative) — falls back to localStorage cache
+let _lastSyncedState = null; // "foto" do estado exatamente como estava na nuvem na última sincronização
 async function loadState() {
   _booting = true; // lock saves during load
 
@@ -703,6 +786,7 @@ async function loadState() {
     if (d.ok && d.state) {
       Object.assign(state, d.state);
       applyDefaults();
+      _lastSyncedState = JSON.parse(JSON.stringify(state)); // marca este ponto como o "base" pra próxima mesclagem
       localStorage.setItem('fc_v3', JSON.stringify(state)); // update cache
       renderTable(); renderCotas(); updateGSStatus();
       showSaveStatus('✓ Dados carregados', 'ok');
@@ -718,32 +802,82 @@ async function loadState() {
 // Debounced save: writes to Supabase + updates localStorage cache
 let _saveTimer = null;
 let _booting = true; // lock saves during initial load
+let _pendingCloudSave = false; // true whenever a debounced save hasn't reached Supabase yet
 
 function save() {
   if (_booting) return; // never save during boot
   // Save to localStorage immediately as cache
   try { localStorage.setItem('fc_v3', JSON.stringify(state)); } catch(e){}
   // Debounce Supabase write by 800ms to avoid hammering on rapid edits
+  _pendingCloudSave = true;
   clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(saveToCloud, 800);
+  _saveTimer = setTimeout(()=>saveToCloud(false), 800);
 }
 
-async function saveToCloud() {
+async function saveToCloud(keepalive) {
   const token = localStorage.getItem(TOKEN_KEY);
   if (!token) return;
+  _pendingCloudSave = false;
+
+  if (keepalive) {
+    // Emergência (página fechando/saindo): manda o que temos aqui, sem round-trip extra de mesclagem.
+    try {
+      await fetch(STATE_FN, {
+        method: 'POST', headers: { 'Content-Type':'application/json', 'x-app-token':token },
+        body: JSON.stringify({ state }), keepalive: true
+      });
+    } catch(e) { _pendingCloudSave = true; }
+    return;
+  }
+
   try {
+    // 1. Busca o que está na nuvem agora, pra ver se o outro dispositivo salvou algo
+    //    desde a última vez que este aparelho sincronizou.
+    const rGet = await fetch(STATE_FN, { method:'GET', headers:{'x-app-token':token} });
+    const dGet = await rGet.json();
+    const remote = (dGet.ok && dGet.state) ? dGet.state : null;
+
+    let toSend = state;
+    if (remote && _lastSyncedState && JSON.stringify(remote) !== JSON.stringify(_lastSyncedState)) {
+      // Alguém mais salvou no meio tempo -> mescla em vez de sobrescrever o que a outra pessoa fez.
+      const merged = threeWayMergeValue(_lastSyncedState, state, remote);
+      Object.keys(state).forEach(k => delete state[k]);
+      Object.assign(state, merged);
+      applyDefaults();
+      toSend = state;
+      reRenderTudo();
+      showSaveStatus('🔄 Mesclado com o outro dispositivo', 'ok');
+    }
+
     const r = await fetch(STATE_FN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-app-token': token },
-      body: JSON.stringify({ state })
+      body: JSON.stringify({ state: toSend })
     });
     const d = await r.json();
-    if (d.ok) showSaveStatus('✓ Salvo', 'ok');
-    else showSaveStatus('⚠ Erro ao salvar', 'warn');
+    if (d.ok) {
+      _lastSyncedState = JSON.parse(JSON.stringify(toSend));
+      try { localStorage.setItem('fc_v3', JSON.stringify(state)); } catch(e){}
+      showSaveStatus('✓ Salvo', 'ok');
+    } else {
+      showSaveStatus('⚠ Erro ao salvar', 'warn');
+    }
   } catch(e) {
+    _pendingCloudSave = true; // não confirmou, mantém marcado como pendente
     showSaveStatus('⚠ Offline — salvo localmente', 'warn');
   }
 }
+
+// Salvamento de emergência: dispara na hora (sem esperar o debounce) sempre que a
+// página for para segundo plano — troca de app, bloqueio de tela, fechar aba, etc.
+// Sem isso, uma edição feita segundos antes de sair do app podia nunca chegar à nuvem.
+function flushPendingSave() {
+  if (_booting || !_pendingCloudSave) return;
+  clearTimeout(_saveTimer);
+  saveToCloud(true);
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushPendingSave(); });
+window.addEventListener('pagehide', flushPendingSave);
 
 function showSaveStatus(msg, type) {
   let el = document.getElementById('saveStatus');
