@@ -463,8 +463,11 @@
   </div>
   <div class="gs-config">
     <h3>🔍 Verificar integridade dos dados</h3>
-    <p>Confere se todos os valores mensais (Anual, Cotas, Casa) estão com as 12 posições certas — útil se algo parecer fora do lugar depois de usar em mais de um aparelho.</p>
-    <button class="btn btn-accent" onclick="verificarIntegridade()">Verificar agora</button>
+    <p>Confere se todos os valores mensais (Anual, Cotas, Casa) estão com as 12 posições certas, e se há despesas duplicadas nas Cotas — útil se algo parecer fora do lugar depois de usar em mais de um aparelho.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-accent" onclick="verificarIntegridade()">Verificar agora</button>
+      <button class="btn btn-ghost" onclick="removerDuplicatasCota()">Remover duplicatas encontradas</button>
+    </div>
     <div id="integridadeResultado" style="margin-top:12px;font-size:.8rem;line-height:1.6;white-space:pre-wrap"></div>
   </div>
 </div>
@@ -980,6 +983,16 @@ function pv(s) {
   return parseFloat(str.replace(/[^\d.-]/g, '')) || 0;
 }
 function cc(v)      { return v>0?'pos':v<0?'neg':''; }
+// Dinheiro nunca deve mostrar mais que 2 casas decimais.
+function r2(v) { if (v===undefined||v===null||v==='') return ''; const n = Math.round(Number(v)*100)/100; return n; }
+// Divide um valor total em N parcelas de 2 casas decimais sem perder centavos —
+// a última parcela absorve a diferença de arredondamento das demais.
+function splitParcelas(total, n) {
+  const base = Math.round((total/n) * 100) / 100;
+  const parcelas = Array(n).fill(base);
+  if (n>0) parcelas[n-1] = Math.round((total - base*(n-1)) * 100) / 100;
+  return parcelas;
+}
 
 // ── ANNUAL ──────────────────────────────────────────────────
 function renderTable() {
@@ -1013,7 +1026,7 @@ function renderTable() {
         ? `<button class="${cmntCls}" onclick="openComment(event,'${row.id}',${i})" title="${hasCmnt ? cmntArr[i] : 'Adicionar comentário'}">💬<span class="cmnt-dot"></span></button>`
         : '';
       return `<td class="editable"><div class="cell-wrap">
-        <input class="cell-input ${inputCls}" value="${v||''}" placeholder="—"
+        <input class="cell-input ${inputCls}" value="${r2(v)||''}" placeholder="—"
           onblur="updateCell('${row.id}',${i},this.value)" onfocus="this.select()">
         ${payBtn}${replBtn}${cmntBtn}
       </div></td>`;
@@ -1239,7 +1252,7 @@ function renderCotas() {
         const tr=document.createElement('tr');
         tr.innerHTML=`<td><button class="del-btn" onclick="deleteCotaDespesa('${d.id}')" title="Excluir">✕</button>${d.desc}</td>`
           +d.monthValues.map((v,i)=>`<td class="editable"><div class="cell-wrap">
-            <input class="cell-input ${v>0?'neg':''}" value="${v||''}" placeholder="—"
+            <input class="cell-input ${v>0?'neg':''}" value="${r2(v)||''}" placeholder="—"
               onblur="updateCotaDespesaCell('${d.id}',${i},this.value)" onfocus="this.select()">
           </div></td>`).join('');
         tb.appendChild(tr);
@@ -1331,8 +1344,8 @@ function calcCotaParcelas() {
   const total=pv(document.getElementById('cotaValor').value);
   const n=Math.max(1,parseInt(document.getElementById('cotaParcelas').value)||1);
   const mesIni=parseInt(document.getElementById('cotaMesInicial').value);
-  const vp=n>0&&total>0?total/n:0;
-  document.getElementById('cotaValorParc').value=vp>0?fmtF(vp):'';
+  const parcelas = total>0 ? splitParcelas(total, n) : Array(n).fill(0);
+  document.getElementById('cotaValorParc').value=parcelas[0]>0?fmtF(parcelas[0]):'';
 
   if(total>0&&n>0) {
     let html='';
@@ -1341,31 +1354,35 @@ function calcCotaParcelas() {
       const yr=state.cotaYear+Math.floor(abs/12);
       const mo=abs%12;
       const extra=yr>state.cotaYear?` <span style="color:var(--warn);font-weight:700">(${yr})</span>`:'';
-      html+=`${MONTHS_F[mo]}${extra}: ${fmtF(vp)}<br>`;
+      html+=`${MONTHS_F[mo]}${extra}: ${fmtF(parcelas[i])}<br>`;
     }
     const prev=document.getElementById('cotaPreview');
     prev.innerHTML=html; prev.style.display='block';
   }
 }
 
+let _addingCotaDespesa = false; // trava contra lançamento duplicado por duplo clique/toque
 function addCotaDespesa() {
+  if (_addingCotaDespesa) return;
   const pessoaId=document.getElementById('cotaModalPessoaId').value;
   const desc=document.getElementById('cotaDesc').value.trim();
   const total=pv(document.getElementById('cotaValor').value);
   const n=Math.max(1,parseInt(document.getElementById('cotaParcelas').value)||1);
   const mesIni=parseInt(document.getElementById('cotaMesInicial').value);
   if(!desc||!total){ alert('Preencha descrição e valor.'); return; }
-  const vp=total/n;
+  _addingCotaDespesa = true;
+  const parcelas = splitParcelas(total, n); // 2 casas decimais, sem perder centavos no total
   const byYear={};
   for(let i=0;i<n;i++){
     const abs=mesIni+i;
     const yr=state.cotaYear+Math.floor(abs/12);
     const mo=abs%12;
     if(!byYear[yr]) byYear[yr]={id:gid(),pessoaId,desc,year:yr,monthValues:Array(12).fill(0)};
-    byYear[yr].monthValues[mo]+=vp;
+    byYear[yr].monthValues[mo]+=parcelas[i];
   }
   Object.values(byYear).forEach(e=>state.cotaDespesas.push(e));
   save(); closeModal('modalCota'); renderCotas();
+  setTimeout(()=>{ _addingCotaDespesa = false; }, 600);
 }
 
 function deleteCotaDespesa(id) {
@@ -1405,7 +1422,7 @@ function renderDecimo() {
         ? `<button class="${btnCls}" onclick="toggleDecimoPaid('${row.id}',${ano})" title="${isPaid?'Marcar como pendente':'Marcar como recebido/pago'}">${btnLabel}</button>`
         : '';
       return `<td class="editable"><div class="cell-wrap">
-        <input class="cell-input ${inputCls}" value="${v||''}" placeholder="—"
+        <input class="cell-input ${inputCls}" value="${r2(v)||''}" placeholder="—"
           onblur="updateDecimoCell('${row.id}',${ano},this.value)" onfocus="this.select()">
         ${payBtn}
       </div></td>`;
@@ -1520,7 +1537,7 @@ function calcParcelamentoPreview() {
   const mesIni = parseInt(document.getElementById('pcMesInicial').value);
   const anoIni = parseInt(document.getElementById('pcAnoInicial').value) || new Date().getFullYear();
   const anoDecimo = parseInt(document.getElementById('pcAnoDecimo').value) || anoIni;
-  const vp = n>0 && total>0 ? total/n : 0;
+  const vp = n>0 && total>0 ? Math.round((total/n)*100)/100 : 0;
 
   if (total>0 && n>0) {
     let html='';
@@ -1539,7 +1556,9 @@ function calcParcelamentoPreview() {
     document.getElementById('pcPreview').style.display='none';
   }
 }
+let _addingParcelamento = false; // trava contra lançamento duplicado por duplo clique/toque
 function addParcelamento() {
+  if (_addingParcelamento) return;
   const desc = document.getElementById('pcDesc').value.trim();
   const total = pv(document.getElementById('pcValor').value);
   const n = Math.max(1, parseInt(document.getElementById('pcParcelas').value)||1);
@@ -1547,7 +1566,8 @@ function addParcelamento() {
   const anoIni = parseInt(document.getElementById('pcAnoInicial').value) || new Date().getFullYear();
   const anoDecimo = parseInt(document.getElementById('pcAnoDecimo').value) || anoIni;
   if (!desc || !total) { alert('Preencha descrição e valor.'); return; }
-  const valorParcela = total/n;
+  _addingParcelamento = true;
+  const valorParcela = Math.round((total/n)*100)/100;
   const parcelas = [];
   for (let i=0;i<n;i++) {
     const abs = mesIni+i;
@@ -1557,6 +1577,7 @@ function addParcelamento() {
   }
   state.decimoParcelamentos.push({ id:gid(), desc, anoDecimo, valorTotal:total, numParcelas:n, valorParcela, parcelas });
   save(); closeModal('modalParcelamento'); renderDecimo();
+  setTimeout(()=>{ _addingParcelamento = false; }, 600);
 }
 function deleteParcelamento(id) {
   if (!confirm('Excluir este parcelamento?')) return;
@@ -1695,7 +1716,7 @@ function renderCasa() {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td><button class="del-btn" onclick="deleteCasaInvestimento('${row.id}')" title="Excluir">✕</button>${row.nome}</td>` +
       arr.map((v,i)=>`<td class="editable"><div class="cell-wrap">
-        <input class="cell-input" value="${v||''}" placeholder="—"
+        <input class="cell-input" value="${r2(v)||''}" placeholder="—"
           onblur="updateCasaCell('${row.id}',${i},this.value)" onfocus="this.select()"></div></td>`).join('');
     tb.appendChild(tr);
   });
@@ -1875,6 +1896,26 @@ function importData(e){
 // ── VERIFICAÇÃO DE INTEGRIDADE ─────────────────────────────────
 // Confere se os campos que precisam ter exatamente 12 posições (um valor por mês)
 // realmente têm 12 — sinal de que não foram corrompidos por uma sincronização ruim.
+function encontrarDuplicatasCota() {
+  // Agrupa despesas da mesma pessoa, mesma descrição e mesmo ano; dentro de cada
+  // grupo, considera duplicata real quando os 12 valores mensais são praticamente
+  // idênticos (arredondados a centavos) — compras diferentes na mesma loja quase
+  // nunca batem centavo a centavo.
+  const grupos = {};
+  state.cotaDespesas.forEach(d => {
+    const chave = d.pessoaId + '|' + (d.desc||'').trim().toLowerCase() + '|' + d.year;
+    (grupos[chave] = grupos[chave] || []).push(d);
+  });
+  const duplicatas = [];
+  Object.values(grupos).forEach(lista => {
+    if (lista.length < 2) return;
+    const assinatura = d => JSON.stringify((d.monthValues||[]).map(v=>Math.round((v||0)*100)));
+    const porAssinatura = {};
+    lista.forEach(d => { (porAssinatura[assinatura(d)] = porAssinatura[assinatura(d)] || []).push(d); });
+    Object.values(porAssinatura).forEach(iguais => { if (iguais.length > 1) duplicatas.push(iguais); });
+  });
+  return duplicatas;
+}
 function verificarIntegridade() {
   const problemas = [];
   function checar12(label, arr) {
@@ -1901,13 +1942,41 @@ function verificarIntegridade() {
     Object.keys(inv.valores||{}).forEach(ano => checar12(`Casa Própria · "${inv.nome}" — ${ano}`, inv.valores[ano]));
   });
 
+  const duplicatas = encontrarDuplicatasCota();
+  const linhasDuplicatas = duplicatas.map(grupo => {
+    const d = grupo[0];
+    const pessoa = state.pessoas.find(p=>p.id===d.pessoaId);
+    return `Cotas · "${d.desc}" (${pessoa?pessoa.name:'?'}) — ${d.year}: ${grupo.length} lançamentos idênticos encontrados (deveria ser 1).`;
+  });
+
   const out = document.getElementById('integridadeResultado');
-  if (!problemas.length) {
+  const tudoOk = !problemas.length && !duplicatas.length;
+  if (tudoOk) {
     out.innerHTML = '<span style="color:var(--green)">✅ Nenhum problema encontrado.</span>';
   } else {
-    out.innerHTML = `<span style="color:var(--red);font-weight:600">⚠ Encontrados ${problemas.length} problema(s):</span>\n\n` + problemas.join('\n\n');
+    let html = '';
+    if (problemas.length) html += `<span style="color:var(--red);font-weight:600">⚠ ${problemas.length} problema(s) de formato:</span>\n\n` + problemas.join('\n\n');
+    if (duplicatas.length) html += (html?'\n\n':'') + `<span style="color:var(--warn);font-weight:600">⚠ ${duplicatas.length} grupo(s) de despesas duplicadas:</span>\n\n` + linhasDuplicatas.join('\n');
+    out.innerHTML = html;
   }
-  return problemas;
+  return { problemas, duplicatas };
+}
+function removerDuplicatasCota() {
+  const duplicatas = encontrarDuplicatasCota();
+  if (!duplicatas.length) { alert('Nenhuma duplicata encontrada nas Cotas.'); return; }
+  const total = duplicatas.reduce((s,g)=>s+(g.length-1),0);
+  const resumo = duplicatas.map(grupo => {
+    const d = grupo[0];
+    const pessoa = state.pessoas.find(p=>p.id===d.pessoaId);
+    return `• "${d.desc}" (${pessoa?pessoa.name:'?'}, ${d.year}): mantém 1, remove ${grupo.length-1}`;
+  }).join('\n');
+  if (!confirm(`Isso vai remover ${total} lançamento(s) duplicado(s), mantendo apenas 1 de cada grupo:\n\n${resumo}\n\nContinuar?`)) return;
+  const idsParaRemover = new Set();
+  duplicatas.forEach(grupo => grupo.slice(1).forEach(d => idsParaRemover.add(d.id)));
+  state.cotaDespesas = state.cotaDespesas.filter(d => !idsParaRemover.has(d.id));
+  save(); renderCotas();
+  verificarIntegridade();
+  alert(`✅ ${idsParaRemover.size} despesa(s) duplicada(s) removida(s).`);
 }
 
 // ── NAV ──────────────────────────────────────────────────────
