@@ -461,6 +461,12 @@
       <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(event)">
     </div>
   </div>
+  <div class="gs-config">
+    <h3>🔍 Verificar integridade dos dados</h3>
+    <p>Confere se todos os valores mensais (Anual, Cotas, Casa) estão com as 12 posições certas — útil se algo parecer fora do lugar depois de usar em mais de um aparelho.</p>
+    <button class="btn btn-accent" onclick="verificarIntegridade()">Verificar agora</button>
+    <div id="integridadeResultado" style="margin-top:12px;font-size:.8rem;line-height:1.6;white-space:pre-wrap"></div>
+  </div>
 </div>
 
 <!-- MODAL: ADD ROW -->
@@ -1864,6 +1870,44 @@ function importData(e){
     alert('✅ Importado!');
   }catch{alert('❌ Arquivo inválido.');}};
   r.readAsText(f);
+}
+
+// ── VERIFICAÇÃO DE INTEGRIDADE ─────────────────────────────────
+// Confere se os campos que precisam ter exatamente 12 posições (um valor por mês)
+// realmente têm 12 — sinal de que não foram corrompidos por uma sincronização ruim.
+function verificarIntegridade() {
+  const problemas = [];
+  function checar12(label, arr) {
+    if (arr === undefined || arr === null) return;
+    if (!Array.isArray(arr)) { problemas.push(`${label}: formato inesperado (não é uma lista).`); return; }
+    if (arr.length !== 12) {
+      problemas.push(`${label}: tem ${arr.length} posição(ões) em vez de 12. Valores atuais: [${arr.join(', ')}]`);
+    }
+  }
+
+  // Anual
+  state.rows.forEach(r => {
+    Object.keys(r.values||{}).forEach(ano => checar12(`Anual · "${r.name}" — ${ano}`, r.values[ano]));
+  });
+
+  // Cotas
+  state.cotaDespesas.forEach(d => {
+    const pessoa = state.pessoas.find(p=>p.id===d.pessoaId);
+    checar12(`Cotas · "${d.desc}" (${pessoa?pessoa.name:'pessoa não encontrada'}) — ${d.year}`, d.monthValues);
+  });
+
+  // Casa Própria
+  (state.casaInvestimentos||[]).forEach(inv => {
+    Object.keys(inv.valores||{}).forEach(ano => checar12(`Casa Própria · "${inv.nome}" — ${ano}`, inv.valores[ano]));
+  });
+
+  const out = document.getElementById('integridadeResultado');
+  if (!problemas.length) {
+    out.innerHTML = '<span style="color:var(--green)">✅ Nenhum problema encontrado.</span>';
+  } else {
+    out.innerHTML = `<span style="color:var(--red);font-weight:600">⚠ Encontrados ${problemas.length} problema(s):</span>\n\n` + problemas.join('\n\n');
+  }
+  return problemas;
 }
 
 // ── NAV ──────────────────────────────────────────────────────
