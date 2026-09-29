@@ -1198,12 +1198,22 @@ function getCotaDoMes(pessoa, ano, mes) {
 function calcSaldos(pessoaId) {
   const pessoa = state.pessoas.find(p=>p.id===pessoaId);
   const ini=Array(12).fill(0), fim=Array(12).fill(0);
+  // O saldo acumulado atravessa os anos: parte do primeiro ano com lançamentos
+  // (ou alteração de cota real; 2020 é só o marcador da migração) e segue até o ano exibido.
+  const anos = state.cotaDespesas.filter(d=>d.pessoaId===pessoaId).map(d=>d.year)
+    .concat((pessoa.cotaHistorico||[]).filter(h=>h.ano>2020).map(h=>h.ano));
+  const anoInicio = Math.min(state.cotaYear, ...anos);
   let carry=0;
-  for(let i=0;i<12;i++){
-    const cota = getCotaDoMes(pessoa, state.cotaYear, i);
-    ini[i]=carry;
-    fim[i]=carry+cota-getCotaGasto(pessoaId,i);
-    carry=fim[i];
+  for(let ano=anoInicio; ano<=state.cotaYear; ano++){
+    for(let i=0;i<12;i++){
+      const cota = getCotaDoMes(pessoa, ano, i);
+      const gasto = state.cotaDespesas
+        .filter(d=>d.pessoaId===pessoaId && d.year===ano)
+        .reduce((s,d)=>s+(d.monthValues[i]||0),0);
+      if (ano===state.cotaYear) ini[i]=carry;
+      carry=carry+cota-gasto;
+      if (ano===state.cotaYear) fim[i]=carry;
+    }
   }
   return {ini,fim};
 }
