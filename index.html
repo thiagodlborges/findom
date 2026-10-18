@@ -187,6 +187,7 @@
   .cota-carry-row td:first-child { background:#f5efe8 !important; }
   .cota-disp-row td { background:rgba(74,110,63,.08) !important; font-weight:700; font-family:'Syne',sans-serif !important; border-top:1px solid rgba(74,110,63,.2); color:var(--text) !important; }
   .cota-disp-row td:first-child { background:rgba(74,110,63,.08) !important; color:var(--green) !important; }
+  .parc-tag { margin-left:6px; font-family:'DM Mono',monospace; font-size:.62rem; color:var(--muted); background:var(--surface2); border:1px solid var(--border); border-radius:99px; padding:1px 7px; white-space:nowrap; }
   .cota-divider { border:none; border-top:2px solid var(--border); margin:28px 0; }
 
   /* MODAL */
@@ -463,10 +464,11 @@
   </div>
   <div class="gs-config">
     <h3>🔍 Verificar integridade dos dados</h3>
-    <p>Confere se todos os valores mensais (Anual, Cotas, Casa) estão com as 12 posições certas, e se há despesas duplicadas nas Cotas — útil se algo parecer fora do lugar depois de usar em mais de um aparelho.</p>
+    <p>Confere se todos os valores mensais (Anual, Cotas, Casa) estão com as 12 posições certas, se há despesas duplicadas nas Cotas e parcelas órfãs (sobras de um parcelamento já excluído) — útil se algo parecer fora do lugar depois de usar em mais de um aparelho.</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn btn-accent" onclick="verificarIntegridade()">Verificar agora</button>
       <button class="btn btn-ghost" onclick="removerDuplicatasCota()">Remover duplicatas encontradas</button>
+      <button class="btn btn-ghost" onclick="removerParcelasOrfasCota()">Remover parcelas órfãs</button>
     </div>
     <div id="integridadeResultado" style="margin-top:12px;font-size:.8rem;line-height:1.6;white-space:pre-wrap"></div>
   </div>
@@ -1250,7 +1252,7 @@ function renderCotas() {
       sep.innerHTML=`<td colspan="13">▸ DESPESAS LANÇADAS</td>`; tb.appendChild(sep);
       deps.forEach(d=>{
         const tr=document.createElement('tr');
-        tr.innerHTML=`<td><button class="del-btn" onclick="deleteCotaDespesa('${d.id}')" title="Excluir">✕</button>${d.desc}</td>`
+        tr.innerHTML=`<td><button class="del-btn" onclick="deleteCotaDespesa('${d.id}')" title="Excluir">✕</button>${d.desc}${(()=>{const inf=cotaInfoParcelas(d); return inf&&inf.n>1?`<span class="parc-tag" title="Total de parcelas desta compra, somando todos os anos">${inf.n}x · até ${MONTHS[inf.ultimo.m]}/${inf.ultimo.y}</span>`:'';})()}</td>`
           +d.monthValues.map((v,i)=>`<td class="editable"><div class="cell-wrap">
             <input class="cell-input ${v>0?'neg':''}" value="${r2(v)||''}" placeholder="—"
               onblur="updateCotaDespesaCell('${d.id}',${i},this.value)" onfocus="this.select()">
@@ -1373,11 +1375,12 @@ function addCotaDespesa() {
   _addingCotaDespesa = true;
   const parcelas = splitParcelas(total, n); // 2 casas decimais, sem perder centavos no total
   const byYear={};
+  const grupo=gid(); // liga as partes (uma por ano) da mesma compra, pra excluir/contar juntas
   for(let i=0;i<n;i++){
     const abs=mesIni+i;
     const yr=state.cotaYear+Math.floor(abs/12);
     const mo=abs%12;
-    if(!byYear[yr]) byYear[yr]={id:gid(),pessoaId,desc,year:yr,monthValues:Array(12).fill(0)};
+    if(!byYear[yr]) byYear[yr]={id:gid(),grupo,pessoaId,desc,year:yr,monthValues:Array(12).fill(0)};
     byYear[yr].monthValues[mo]+=parcelas[i];
   }
   Object.values(byYear).forEach(e=>state.cotaDespesas.push(e));
@@ -1385,10 +1388,64 @@ function addCotaDespesa() {
   setTimeout(()=>{ _addingCotaDespesa = false; }, 600);
 }
 
+// Uma compra parcelada que atravessa a virada do ano vira uma despesa por ano.
+// Estas funções reencontram todas as partes da mesma compra.
+function cotaCriadoEm(d) { return parseInt(String(d.id).slice(0,8),36); } // gid() começa com Date.now() em base 36
+function cotaCadeia(d) {
+  if (d.grupo) return state.cotaDespesas.filter(x=>x.grupo===d.grupo);
+  // lançamentos antigos (sem grupo): as partes de uma compra foram criadas no mesmo instante (±50ms)
+  const t=cotaCriadoEm(d), nome=(d.desc||'').trim().toLowerCase();
+  if (isNaN(t)) return [d];
+  return state.cotaDespesas.filter(x=>!x.grupo && x.pessoaId===d.pessoaId
+    && (x.desc||'').trim().toLowerCase()===nome && Math.abs(cotaCriadoEm(x)-t)<=50);
+}
+function cotaInfoParcelas(d) {
+  let n=0, ultimo=null;
+  cotaCadeia(d).forEach(x=>(x.monthValues||[]).forEach((v,i)=>{
+    if (v>0) { n++; if (!ultimo || x.year>ultimo.y || (x.year===ultimo.y && i>ultimo.m)) ultimo={y:x.year,m:i}; }
+  }));
+  return n ? {n, ultimo} : null;
+}
 function deleteCotaDespesa(id) {
-  if(!confirm('Excluir esta despesa da cota?')) return;
-  state.cotaDespesas=state.cotaDespesas.filter(d=>d.id!==id);
+  const d=state.cotaDespesas.find(x=>x.id===id); if(!d) return;
+  const cadeia=cotaCadeia(d);
+  const anos=[...new Set(cadeia.map(x=>x.year))].sort().join(', ');
+  const msg = cadeia.length>1
+    ? `Excluir "${d.desc}" da cota? A compra tem parcelas em ${anos}; todas serão excluídas.`
+    : 'Excluir esta despesa da cota?';
+  if(!confirm(msg)) return;
+  const ids=new Set(cadeia.map(x=>x.id)); ids.add(id);
+  state.cotaDespesas=state.cotaDespesas.filter(x=>!ids.has(x.id));
   save(); renderCotas();
+}
+// Parcelas "órfãs": parte de um ano seguinte cuja parte do ano anterior já foi excluída
+// (sobra do tempo em que excluir apagava só um ano). Só vale para parte criada num ano
+// anterior ao seu próprio ano (continuação de parcelamento), nunca para lançamento novo.
+function encontrarParcelasOrfas() {
+  const removidos=new Set();
+  let mudou=true;
+  while(mudou) {
+    mudou=false;
+    state.cotaDespesas.forEach(d=>{
+      if (removidos.has(d.id)) return;
+      const t=cotaCriadoEm(d);
+      if (isNaN(t) || d.year<=new Date(t).getFullYear()) return;
+      const temAnterior=cotaCadeia(d).some(x=>x.id!==d.id && !removidos.has(x.id) && x.year===d.year-1);
+      if (!temAnterior) { removidos.add(d.id); mudou=true; }
+    });
+  }
+  return state.cotaDespesas.filter(d=>removidos.has(d.id));
+}
+function removerParcelasOrfasCota() {
+  const orfas=encontrarParcelasOrfas();
+  if (!orfas.length) { alert('Nenhuma parcela órfã encontrada nas Cotas.'); return; }
+  const nomePessoa=d=>(state.pessoas.find(p=>p.id===d.pessoaId)||{}).name||'?';
+  const resumo=orfas.map(d=>`• "${d.desc}" (${nomePessoa(d)}, ${d.year})`).join('\n');
+  if (!confirm(`Estas ${orfas.length} despesa(s) continuam um parcelamento cujo lançamento do ano anterior não existe mais:\n\n${resumo}\n\nRemover?`)) return;
+  const ids=new Set(orfas.map(d=>d.id));
+  state.cotaDespesas=state.cotaDespesas.filter(d=>!ids.has(d.id));
+  save(); renderCotas(); verificarIntegridade();
+  alert(`✅ ${ids.size} parcela(s) órfã(s) removida(s).`);
 }
 function updateCotaDespesaCell(id, i, raw) {
   const d = state.cotaDespesas.find(x=>x.id===id); if (!d) return;
@@ -1949,14 +2006,21 @@ function verificarIntegridade() {
     return `Cotas · "${d.desc}" (${pessoa?pessoa.name:'?'}) — ${d.year}: ${grupo.length} lançamentos idênticos encontrados (deveria ser 1).`;
   });
 
+  const orfas = encontrarParcelasOrfas();
+  const linhasOrfas = orfas.map(d => {
+    const pessoa = state.pessoas.find(p=>p.id===d.pessoaId);
+    return `Cotas · "${d.desc}" (${pessoa?pessoa.name:'?'}) — ${d.year}: continuação de parcelamento sem o lançamento do ano anterior.`;
+  });
+
   const out = document.getElementById('integridadeResultado');
-  const tudoOk = !problemas.length && !duplicatas.length;
+  const tudoOk = !problemas.length && !duplicatas.length && !orfas.length;
   if (tudoOk) {
     out.innerHTML = '<span style="color:var(--green)">✅ Nenhum problema encontrado.</span>';
   } else {
     let html = '';
     if (problemas.length) html += `<span style="color:var(--red);font-weight:600">⚠ ${problemas.length} problema(s) de formato:</span>\n\n` + problemas.join('\n\n');
     if (duplicatas.length) html += (html?'\n\n':'') + `<span style="color:var(--warn);font-weight:600">⚠ ${duplicatas.length} grupo(s) de despesas duplicadas:</span>\n\n` + linhasDuplicatas.join('\n');
+    if (orfas.length) html += (html?'\n\n':'') + `<span style="color:var(--warn);font-weight:600">⚠ ${orfas.length} parcela(s) órfã(s):</span>\n\n` + linhasOrfas.join('\n');
     out.innerHTML = html;
   }
   return { problemas, duplicatas };
