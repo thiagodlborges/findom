@@ -1278,9 +1278,9 @@ function renderCotas() {
     mkR('cota-total-row','Cota do Mês', cotasPorMes, v=>'pos');
     mkR('cota-carry-row','↳ Saldo anterior', ini, (v)=>v!==0?cc(v):'');
 
-    // Disponível = ini + cota_do_mes - gasto
-    const disp=Array(12).fill(0).map((_,i)=>(ini[i]||0)+cotasPorMes[i]-gastos[i]);
-    mkR('cota-disp-row','💰 Disponível no mês', disp, cc);
+    // Resultado do mês = cota_do_mes - gasto (sem o saldo anterior; o acumulado soma o anterior)
+    const disp=Array(12).fill(0).map((_,i)=>cotasPorMes[i]-gastos[i]);
+    mkR('cota-disp-row','💰 Disponível no mês (cota − gasto)', disp, cc);
     mkR('cota-saldo-row','SALDO ACUMULADO', fim, cc);
 
     tbl.appendChild(tb); wrap.appendChild(tbl); block.appendChild(wrap);
