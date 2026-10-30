@@ -1183,9 +1183,9 @@ document.addEventListener('keydown',e=>{
 // ── COTAS ────────────────────────────────────────────────────
 function changeCotaYear(d) { state.cotaYear+=d; save(); renderCotas(); }
 
-function getCotaGasto(pessoaId, mi) {
+function getCotaGasto(pessoaId, mi, year=state.cotaYear) {
   return state.cotaDespesas
-    .filter(d=>d.pessoaId===pessoaId && d.year===state.cotaYear)
+    .filter(d=>d.pessoaId===pessoaId && d.year===year)
     .reduce((s,d)=>s+(d.monthValues[mi]||0),0);
 }
 
@@ -1200,12 +1200,18 @@ function getCotaDoMes(pessoa, ano, mes) {
 function calcSaldos(pessoaId) {
   const pessoa = state.pessoas.find(p=>p.id===pessoaId);
   const ini=Array(12).fill(0), fim=Array(12).fill(0);
+  // O saldo de cada mês (inclusive dez → jan) é transportado para o seguinte,
+  // acumulando desde o primeiro ano com despesas até o ano exibido.
+  const anos = state.cotaDespesas.filter(d=>d.pessoaId===pessoaId).map(d=>d.year);
+  const anoIni = Math.min(state.cotaYear, ...anos);
   let carry=0;
-  for(let i=0;i<12;i++){
-    const cota = getCotaDoMes(pessoa, state.cotaYear, i);
-    ini[i]=carry;
-    fim[i]=carry+cota-getCotaGasto(pessoaId,i);
-    carry=fim[i];
+  for(let y=anoIni;y<=state.cotaYear;y++){
+    for(let i=0;i<12;i++){
+      const cota = getCotaDoMes(pessoa, y, i);
+      if(y===state.cotaYear) ini[i]=carry;
+      carry = carry + cota - getCotaGasto(pessoaId,i,y);
+      if(y===state.cotaYear) fim[i]=carry;
+    }
   }
   return {ini,fim};
 }
